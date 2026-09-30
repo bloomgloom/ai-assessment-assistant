@@ -5,7 +5,7 @@ import { AiGenerateBox } from '../../components/common/AiGenerateBox';
 import { CriteriaItemCard } from '../../components/common/CriteriaItemCard';
 import { StableTextarea } from '../../components/common/StableTextarea';
 import { assignmentConfigsApi } from '../../lib/api';
-import { downloadUrl, filesToInputChangeEvent, hasDesktopFileDialogs, openFiles } from '../../lib/desktopFiles';
+import { downloadUrl, filesToInputChangeEvent, hasDesktopFileDialogs, openFiles, saveBlob } from '../../lib/desktopFiles';
 import { DomainCriteriaPanel, DomainCriteriaPromptView, DomainCriteriaSplit } from './DomainCriteriaPanel';
 import { AiChatMessage, AssignmentClassSnapshot, AssignmentConfig, AssignmentResource, AssignmentRunDetail, AssignmentRunStudent, AssignmentRunSubmission, AssignmentRunSummary, EvalItem, CommentsItem, StandardRef, SubjectDomainRow, SubjectItem } from './types';
 
@@ -903,6 +903,18 @@ export function DomainContent({
                   >
                     {assignmentUploading ? <Loader2 size={13} className="animate-spin" /> : <Upload size={13} />}
                     MD 업로드
+                  </button>
+                  <button
+                    type="button"
+                    className="btn-secondary py-1 text-xs"
+                    onClick={() => saveBlob(
+                      `${assignmentConfig?.title || `${selectedSubject.subject} ${selectedDomain}`} 안내.md`,
+                      new Blob([assignmentConfig?.guide_md || ''], { type: 'text/markdown;charset=utf-8' }),
+                    ).catch((error) => alert(error.message))}
+                    disabled={assignmentLoading}
+                  >
+                    <Download size={13} />
+                    MD 다운로드
                   </button>
                   <button
                     className="btn-secondary py-1 text-xs"

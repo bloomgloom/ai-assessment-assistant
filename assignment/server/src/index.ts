@@ -282,7 +282,7 @@ button:disabled,.button.disabled{opacity:.35;cursor:not-allowed;pointer-events:n
 table{width:100%;border-collapse:collapse;background:#fff}
 th,td{border:1px solid #e5e7eb;padding:8px;text-align:left;font-size:13px}
 th{background:#f9fafb;color:#4b5563}
-.muted{color:#6b7280;font-size:15px}.danger{color:#dc2626}.ok{color:#15803d}.guide{line-height:1.75;font-size:16px}.guide p{font-size:16px}.guide h1{font-size:24px}.guide h2{font-size:20px}.guide h3{font-size:18px}.guide ul{padding-left:22px}.guide table{margin:14px 0}.guide th{font-weight:700}
+.muted{color:#6b7280;font-size:15px}.danger{color:#dc2626}.ok{color:#15803d}.guide{line-height:1.75;font-size:16px}.guide p{font-size:16px}.guide h1{font-size:24px}.guide h2{font-size:20px}.guide h3{font-size:18px}.guide ul,.guide ol{padding-left:22px}.guide blockquote{margin:16px 0;padding:8px 16px;border-left:4px solid #94a3b8;background:#f8fafc;color:#475569}.guide table{margin:14px 0}.guide th{font-weight:700}
 @media(max-width:900px){.grid,.student-layout,.admin-controls,.student-fields{grid-template-columns:1fr}main{padding:14px}header{padding:0 14px}}
 </style>
 </head>
@@ -291,8 +291,7 @@ th{background:#f9fafb;color:#4b5563}
 }
 
 function markdown(md: string) {
-  const normalized = String(md || '').replace(/^(\s*\d+)\\\.\s+/gm, '$1. ');
-  return mdRenderer.render(normalized);
+  return mdRenderer.render(String(md || ''));
 }
 
 async function currentOpenRun() {

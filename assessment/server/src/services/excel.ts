@@ -96,11 +96,12 @@ export function parseCommentsFilename(filename: string): CommentsFileInfo | null
   const base = path.basename(normalized, path.extname(normalized));
   const match = base.match(/(\d{4})_(\d+)학기_(\d+)학년_(.+?)_(.+?)_과목세특_(\d+)/);
   if (!match) return null;
+  const room = match[6].length <= 2 ? match[6] : match[4].trim();
   return {
     year: parseInt(match[1], 10),
     semester: parseInt(match[2], 10),
     grade: parseInt(match[3], 10),
-    room: /^\d+$/.test(match[4].trim()) ? `${match[4].trim()}강의실` : match[4].trim(),
+    room: /^\d+$/.test(room) ? `${room}강의실` : room,
     subject: match[5].trim(),
     timestamp: match[6],
   };
@@ -283,7 +284,7 @@ export async function parseAreaManagementExcel(filePath: string): Promise<AreaMa
     if (!subjectCreditText) subjectCreditText = cellText(row.getCell(subjectCol).value);
 
     rows.push({
-      evalType,
+      evalType: evalType === '정기시험' ? '지필' : evalType === '수행평가' ? '수행' : evalType,
       name,
       reflected: cellText(row.getCell(reflectedCol).value),
       ratio: numericCell(row.getCell(ratioCol).value),

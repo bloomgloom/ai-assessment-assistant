@@ -133,8 +133,14 @@
   .prose-preview ul {
     @apply my-2 list-disc pl-5;
   }
+  .prose-preview ol {
+    @apply my-2 list-decimal pl-5;
+  }
   .prose-preview li {
     @apply my-1;
+  }
+  .prose-preview blockquote {
+    @apply my-4 border-l-4 border-slate-400 bg-slate-100 px-4 py-2 text-slate-600;
   }
   .prose-preview table {
     width: 100%;
