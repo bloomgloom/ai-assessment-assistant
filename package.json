@@ -36,8 +36,8 @@
   },
   "devDependencies": {
     "@types/pngjs": "^6.0.5",
-    "electron": "^31.7.7",
-    "electron-builder": "^24.13.3",
+    "electron": "44.5.0",
+    "electron-builder": "26.17.0",
     "sharp": "^0.34.5"
   },
   "build": {
