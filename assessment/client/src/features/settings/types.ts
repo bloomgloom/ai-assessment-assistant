@@ -12,11 +12,11 @@ export type GeminiThinkingLevel = 'low' | 'medium' | 'high';
 export type OpenAIReasoningEffort = 'low' | 'medium' | 'high';
 
 export interface AnthropicOutputOption {
-  effort: AnthropicEffort;
-  thinkingEnabled: boolean;
+  model: string;
+  effort: AnthropicEffort | '';
   maxTokens: number | '';
-  thinkingLevel: GeminiThinkingLevel;
-  reasoningEffort: OpenAIReasoningEffort;
+  thinkingLevel: GeminiThinkingLevel | '';
+  reasoningEffort: OpenAIReasoningEffort | '';
 }
 
 export type AnthropicOutputOptions = Record<AnthropicOutputTask, AnthropicOutputOption>;
@@ -30,11 +30,10 @@ export interface SettingsState {
   maxConcurrency: number;
   temperatureEnabled: boolean;
   temperatures: AiTemperatures;
-  anthropicOptionsEnabled: boolean;
-  outputOptionsEnabled: boolean;
   anthropicEffort: AnthropicEffort;
-  anthropicThinkingEnabled: boolean;
   anthropicMaxTokens: number | '';
+  outputThinkingLevel: GeminiThinkingLevel;
+  outputReasoningEffort: OpenAIReasoningEffort;
   anthropicOutputOptions: AnthropicOutputOptions;
   providerSettings: Record<string, {
     model: string;
@@ -42,11 +41,10 @@ export interface SettingsState {
     maxConcurrency: number;
     temperatureEnabled?: boolean;
     temperatures?: AiTemperatures;
-    anthropicOptionsEnabled?: boolean;
-    outputOptionsEnabled?: boolean;
     anthropicEffort?: AnthropicEffort;
-    anthropicThinkingEnabled?: boolean;
     anthropicMaxTokens?: number | '';
+    outputThinkingLevel?: GeminiThinkingLevel;
+    outputReasoningEffort?: OpenAIReasoningEffort;
     anthropicOutputOptions?: AnthropicOutputOptions;
   }>;
   loggingEnabled: boolean;

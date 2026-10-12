@@ -9,7 +9,7 @@ export const PROVIDERS = [
 export const DEFAULT_MODELS: Record<string, string> = {
   gemini: 'gemini-2.5-flash',
   openai: 'gpt-4o-mini',
-  anthropic: 'claude-sonnet-5',
+  anthropic: '',
   ollama: 'llama3',
   'openai-compatible': '',
 };

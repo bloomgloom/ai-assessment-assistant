@@ -10,7 +10,7 @@ const DEFAULT_ASSESSMENT_PORT = 3201;
 const ASSIGNMENT_HOST = '0.0.0.0';
 const DEFAULT_ASSIGNMENT_ADMIN_PORT = 3002;
 const DEFAULT_ASSIGNMENT_TEACHER_PORT = 3003;
-const DEFAULT_ASSIGNMENT_STUDENT_PORT = 3004;
+const DEFAULT_ASSIGNMENT_STUDENT_PORT = 10000;
 
 app.setName('ai-assessment-assistant');
 app.setPath('userData', path.join(app.getPath('appData'), 'ai-assessment-assistant'));

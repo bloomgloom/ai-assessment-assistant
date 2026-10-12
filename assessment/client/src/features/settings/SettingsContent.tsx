@@ -46,13 +46,16 @@ export function SettingsContent({
   temperatureSupported,
   handleTemperatureChange,
   handleTemperatureEnabledChange,
+  handleAnthropicEffortChange,
   handleAnthropicMaxTokensChange,
-  handleOutputOptionsEnabledChange,
+  handleOutputThinkingLevelChange,
+  handleOutputReasoningEffortChange,
+  handleAnthropicTaskModelChange,
   handleAnthropicTaskEffortChange,
-  handleAnthropicTaskThinkingEnabledChange,
   handleAnthropicTaskMaxTokensChange,
   handleGeminiTaskThinkingLevelChange,
   handleOpenAITaskReasoningEffortChange,
+  handleResetOutputOverrides,
 }: SettingsContentProps) {
   const [showApiKey, setShowApiKey] = useState(false);
   const [teacherPassword, setTeacherPassword] = useState('');
@@ -62,11 +65,12 @@ export function SettingsContent({
   const disabledPanelClass = aiDisabled ? 'opacity-45 grayscale select-none' : '';
   const temperatureControlsDisabled = aiDisabled || !settings.temperatureEnabled || !temperatureSupported;
   const outputOptionsAvailable = settings.provider === 'anthropic' || settings.provider === 'gemini' || settings.provider === 'openai';
-  const outputOptionsDisabled = aiDisabled || !settings.outputOptionsEnabled;
+  const outputOptionsDisabled = aiDisabled;
+  const defaultModel = settings.model || DEFAULT_MODELS[settings.provider] || '미지정';
 
   return (
     <div className="flex-1 min-h-0 overflow-auto scrollbar-stable">
-      <div className="min-w-[720px] max-w-2xl px-6 pt-6 pb-32">
+      <div className="min-w-[720px] max-w-5xl px-6 pt-6 pb-32">
       {activeTab === 'ai' && (
       <div className="space-y-6">
       <div className="card p-6 space-y-3">
@@ -250,7 +254,7 @@ export function SettingsContent({
         )}
 
         {/* 모델 선택 */}
-        <div>
+        {!outputOptionsAvailable && <div>
           <label className="label">모델</label>
 
           <div className="space-y-2">
@@ -304,7 +308,7 @@ export function SettingsContent({
               </p>
             ) : null}
           </div>
-        </div>
+        </div>}
 
         {/* 최대 동시 요청 수 */}
         <div>
@@ -326,38 +330,118 @@ export function SettingsContent({
         </div>
 
         {outputOptionsAvailable && (
-          <div className="space-y-3">
-            <div>
+          <div className="space-y-5">
+            <div className="space-y-2">
               <div className="flex items-center justify-between gap-3">
-                <label className="label mb-0">
-                  {settings.provider === 'anthropic' ? 'Claude 출력 옵션' : settings.provider === 'gemini' ? 'Gemini 출력 옵션' : 'ChatGPT 출력 옵션'}
-                </label>
-                <label className={`flex items-center gap-2 text-xs ${aiDisabled ? 'text-gray-400' : 'text-gray-700 cursor-pointer'}`}>
-                  <input
-                    type="checkbox"
-                    className="h-4 w-4 rounded"
-                    checked={settings.outputOptionsEnabled}
-                    disabled={aiDisabled}
-                    onChange={(e) => handleOutputOptionsEnabledChange(e.target.checked)}
-                  />
-                  사용
-                </label>
+                <label className="label mb-0">기본 설정</label>
+                <button
+                  className="btn-secondary shrink-0"
+                  onClick={handleFetchCompatibleModels}
+                  disabled={fetchingModels || aiDisabled}
+                  title="현재 공급자에서 사용 가능한 모델 목록 가져오기"
+                >
+                  {fetchingModels ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
+                  {fetchingModels ? '조회 중...' : '모델 가져오기'}
+                </button>
               </div>
-              <p className="text-xs text-gray-400">
-                끄면 max tokens 8192만 보내고 reasoning/thinking/effort 설정은 보내지 않습니다. 켜면 아래 기능별 값을 모두 수동 적용합니다.
-              </p>
+              <div className="overflow-hidden rounded border border-gray-200">
+                <table className="w-full table-fixed border-collapse text-sm">
+                  <colgroup>
+                    <col className="w-[18%]" />
+                    <col className="w-[42%]" />
+                    <col className="w-[20%]" />
+                    <col className="w-[20%]" />
+                  </colgroup>
+                  <thead>
+                    <tr className="border-b bg-gray-50 text-xs font-semibold text-gray-600">
+                      <th className="px-3 py-2 text-left">구분</th>
+                      <th className="px-3 py-2 text-left">모델</th>
+                      {settings.provider === 'anthropic' && <th className="px-3 py-2 text-left">Effort</th>}
+                      {settings.provider === 'gemini' && <th className="px-3 py-2 text-center">Thinking level</th>}
+                      {settings.provider === 'openai' && <th className="px-3 py-2 text-center">Reasoning effort</th>}
+                      <th className="px-3 py-2 text-left">Max tokens</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <td className="px-3 py-2 text-gray-700">기본값</td>
+                      <td className="px-3 py-2">
+                        {compatibleModels.length > 0 ? (
+                          <select className="select h-8 min-w-44 text-xs" disabled={aiDisabled} value={settings.model} onChange={(e) => setSettings((s) => ({ ...s, model: e.target.value }))}>
+                            <option value="">{DEFAULT_MODELS[settings.provider] || '모델을 선택하세요'}</option>
+                            {compatibleModels.map((model) => <option key={model} value={model}>{model}</option>)}
+                          </select>
+                        ) : (
+                          <input className="input h-8 min-w-44 text-xs" disabled={aiDisabled} value={settings.model} placeholder={DEFAULT_MODELS[settings.provider] || '모델명'} onChange={(e) => setSettings((s) => ({ ...s, model: e.target.value }))} />
+                        )}
+                      </td>
+                      {settings.provider === 'anthropic' && (
+                        <td className="px-3 py-2">
+                          <select className="select h-8 w-28 text-xs" disabled={aiDisabled} value={settings.anthropicEffort} onChange={(e) => handleAnthropicEffortChange(e.target.value as AnthropicEffort)}>
+                            {ANTHROPIC_EFFORT_OPTIONS.map((effort) => <option key={effort.value} value={effort.value}>{effort.label}</option>)}
+                          </select>
+                        </td>
+                      )}
+                      {settings.provider === 'gemini' && (
+                        <td className="px-3 py-2 text-center">
+                          <select className="select h-8 w-28 text-xs" disabled={aiDisabled} value={settings.outputThinkingLevel} onChange={(e) => handleOutputThinkingLevelChange(e.target.value as GeminiThinkingLevel)}>
+                            {GEMINI_THINKING_LEVEL_OPTIONS.map((level) => <option key={level.value} value={level.value}>{level.label}</option>)}
+                          </select>
+                        </td>
+                      )}
+                      {settings.provider === 'openai' && (
+                        <td className="px-3 py-2 text-center">
+                          <select className="select h-8 w-28 text-xs" disabled={aiDisabled} value={settings.outputReasoningEffort} onChange={(e) => handleOutputReasoningEffortChange(e.target.value as OpenAIReasoningEffort)}>
+                            {OPENAI_REASONING_EFFORT_OPTIONS.map((effort) => <option key={effort.value} value={effort.value}>{effort.label}</option>)}
+                          </select>
+                        </td>
+                      )}
+                      <td className="px-3 py-2">
+                        <input
+                          type="number"
+                          min={1}
+                          step={1}
+                          className="input h-8 w-28 text-xs"
+                          disabled={aiDisabled}
+                          value={settings.anthropicMaxTokens}
+                          onChange={(e) => handleAnthropicMaxTokensChange(e.target.value === '' ? '' : Math.max(1, Math.floor(Number(e.target.value) || 1)))}
+                        />
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+              {modelFetchError && <p className="text-xs text-red-600 flex items-center gap-1"><XCircle size={12} /> {modelFetchError}</p>}
+              {compatibleModels.length > 0 && <p className="text-xs text-green-600">{compatibleModels.length}개 모델 로드됨</p>}
             </div>
 
-            <div className="overflow-hidden rounded border border-gray-200">
-              <table className="w-full border-collapse text-sm">
+            <div className="space-y-2">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <label className="label mb-0">기능별 설정</label>
+                  <p className="text-xs text-gray-400">바꾸려는 항목만 선택하면 나머지는 기본 설정을 따릅니다.</p>
+                </div>
+                <button className="btn-secondary shrink-0" onClick={handleResetOutputOverrides} disabled={aiDisabled} title="기능별 설정만 모두 기본값으로 되돌립니다.">
+                  <RefreshCw size={14} />
+                  세부 설정 초기화
+                </button>
+              </div>
+              <div className="overflow-hidden rounded border border-gray-200">
+              <table className="w-full table-fixed border-collapse text-sm">
+                <colgroup>
+                  <col className="w-[18%]" />
+                  <col className="w-[42%]" />
+                  <col className="w-[20%]" />
+                  <col className="w-[20%]" />
+                </colgroup>
                 <thead>
                   <tr className="border-b bg-gray-50 text-xs font-semibold text-gray-600">
                     <th className="px-3 py-2 text-left">기능</th>
+                    <th className="px-3 py-2 text-left">모델</th>
                     {settings.provider === 'anthropic' && <th className="px-3 py-2 text-left">Effort</th>}
-                    {settings.provider === 'anthropic' && <th className="px-3 py-2 text-center">Thinking</th>}
                     {settings.provider === 'gemini' && <th className="px-3 py-2 text-center">Thinking level</th>}
                     {settings.provider === 'openai' && <th className="px-3 py-2 text-center">Reasoning effort</th>}
-                    <th className="px-3 py-2 text-right">Max tokens</th>
+                    <th className="px-3 py-2 text-left">Max tokens</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -367,30 +451,29 @@ export function SettingsContent({
                     return (
                       <tr key={task.key} className="border-b last:border-b-0">
                         <td className="px-3 py-2 text-gray-700">{task.label}</td>
+                        <td className="px-3 py-2">
+                          {compatibleModels.length > 0 ? (
+                            <select className="select h-8 min-w-40 text-xs" value={option.model} disabled={disabled} onChange={(e) => handleAnthropicTaskModelChange(task.key, e.target.value)}>
+                              <option value="">(기본값: {defaultModel})</option>
+                              {compatibleModels.map((model) => <option key={model} value={model}>{model}</option>)}
+                            </select>
+                          ) : (
+                            <input className="input h-8 min-w-40 text-xs" value={option.model} disabled={disabled} placeholder={`(기본값: ${defaultModel})`} onChange={(e) => handleAnthropicTaskModelChange(task.key, e.target.value)} />
+                          )}
+                        </td>
                         {settings.provider === 'anthropic' && (
                           <td className="px-3 py-2 text-center">
                             <select
                               className="select h-8 w-28 text-center text-xs"
                               value={option.effort}
                               disabled={disabled}
-                              onChange={(e) => handleAnthropicTaskEffortChange(task.key, e.target.value as AnthropicEffort)}
+                              onChange={(e) => handleAnthropicTaskEffortChange(task.key, e.target.value as AnthropicEffort | '')}
                             >
+                              <option value="">(기본값: {settings.anthropicEffort})</option>
                               {ANTHROPIC_EFFORT_OPTIONS.map((effort) => (
                                 <option key={effort.value} value={effort.value}>{effort.label}</option>
                               ))}
                             </select>
-                          </td>
-                        )}
-                        {settings.provider === 'anthropic' && (
-                          <td className="px-3 py-2 text-center">
-                            <input
-                              type="checkbox"
-                              className="h-4 w-4 rounded"
-                              checked={option.thinkingEnabled}
-                              disabled={disabled}
-                              onChange={(e) => handleAnthropicTaskThinkingEnabledChange(task.key, e.target.checked)}
-                              aria-label={`${task.label} Thinking 사용`}
-                            />
                           </td>
                         )}
                         {settings.provider === 'gemini' && (
@@ -399,8 +482,9 @@ export function SettingsContent({
                               className="select h-8 w-28 text-center text-xs"
                               value={option.thinkingLevel}
                               disabled={disabled}
-                              onChange={(e) => handleGeminiTaskThinkingLevelChange(task.key, e.target.value as GeminiThinkingLevel)}
+                              onChange={(e) => handleGeminiTaskThinkingLevelChange(task.key, e.target.value as GeminiThinkingLevel | '')}
                             >
+                              <option value="">(기본값: {settings.outputThinkingLevel})</option>
                               {GEMINI_THINKING_LEVEL_OPTIONS.map((level) => (
                                 <option key={level.value} value={level.value}>{level.label}</option>
                               ))}
@@ -413,8 +497,9 @@ export function SettingsContent({
                               className="select h-8 w-28 text-center text-xs"
                               value={option.reasoningEffort}
                               disabled={disabled}
-                              onChange={(e) => handleOpenAITaskReasoningEffortChange(task.key, e.target.value as OpenAIReasoningEffort)}
+                              onChange={(e) => handleOpenAITaskReasoningEffortChange(task.key, e.target.value as OpenAIReasoningEffort | '')}
                             >
+                              <option value="">(기본값: {settings.outputReasoningEffort})</option>
                               {OPENAI_REASONING_EFFORT_OPTIONS.map((effort) => (
                                 <option key={effort.value} value={effort.value}>{effort.label}</option>
                               ))}
@@ -428,6 +513,7 @@ export function SettingsContent({
                             step={1}
                             className="input h-8 w-24 text-left text-xs"
                             value={option.maxTokens}
+                            placeholder={`기본값: ${settings.anthropicMaxTokens || 8192}`}
                             disabled={disabled}
                             onChange={(e) => handleAnthropicTaskMaxTokensChange(task.key, e.target.value === '' ? '' : Math.max(1, Math.floor(Number(e.target.value) || 1)))}
                             aria-label={`${task.label} Max tokens`}
@@ -438,6 +524,7 @@ export function SettingsContent({
                   })}
                 </tbody>
               </table>
+              </div>
             </div>
           </div>
         )}

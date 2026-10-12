@@ -53,39 +53,28 @@ function normalizeAnthropicMaxTokens(value: unknown): number | '' {
   return Math.floor(numeric);
 }
 
-function defaultAnthropicEffortForModel(model: string): AnthropicEffort {
-  const normalized = model.toLowerCase();
-  if (normalized.includes('fable')) return 'medium';
-  return 'high';
-}
-
-function defaultAnthropicThinkingForModel(model: string): boolean {
-  return model.toLowerCase().includes('opus');
-}
-
-function defaultAnthropicOutputOptions(provider = 'anthropic', model = ''): AnthropicOutputOptions {
+function defaultAnthropicOutputOptions(): AnthropicOutputOptions {
   return Object.fromEntries(ANTHROPIC_OUTPUT_TASKS.map((task) => [task.key, {
-    effort: defaultAnthropicEffortForModel(model),
-    thinkingEnabled: defaultAnthropicThinkingForModel(model),
-    maxTokens: 8192,
-    thinkingLevel: 'medium' as GeminiThinkingLevel,
-    reasoningEffort: 'medium' as OpenAIReasoningEffort,
+    model: '',
+    effort: '',
+    maxTokens: '',
+    thinkingLevel: '',
+    reasoningEffort: '',
   }])) as AnthropicOutputOptions;
 }
 
-function normalizeAnthropicOutputOptions(value: unknown, legacy?: Partial<SettingsState>, provider = legacy?.provider || 'anthropic', model = legacy?.model || ''): AnthropicOutputOptions {
+function normalizeAnthropicOutputOptions(value: unknown): AnthropicOutputOptions {
   const source = value && typeof value === 'object'
     ? value as Partial<Record<AnthropicOutputTask, Partial<AnthropicOutputOptions[AnthropicOutputTask]>>>
     : {};
-  const defaults = defaultAnthropicOutputOptions(provider, model);
   return Object.fromEntries(ANTHROPIC_OUTPUT_TASKS.map((task) => {
     const item = source[task.key] || {};
     return [task.key, {
-      effort: normalizeAnthropicEffort(item.effort ?? legacy?.anthropicEffort ?? defaults[task.key].effort),
-      thinkingEnabled: item.thinkingEnabled ?? legacy?.anthropicThinkingEnabled ?? defaults[task.key].thinkingEnabled,
-      maxTokens: normalizeAnthropicMaxTokens(item.maxTokens ?? legacy?.anthropicMaxTokens),
-      thinkingLevel: normalizeGeminiThinkingLevel(item.thinkingLevel ?? defaults[task.key].thinkingLevel),
-      reasoningEffort: normalizeOpenAIReasoningEffort(item.reasoningEffort ?? defaults[task.key].reasoningEffort),
+      model: String(item.model || ''),
+      effort: item.effort ? normalizeAnthropicEffort(item.effort) : '',
+      maxTokens: item.maxTokens === undefined || item.maxTokens === null || item.maxTokens === '' ? '' : normalizeAnthropicMaxTokens(item.maxTokens),
+      thinkingLevel: item.thinkingLevel ? normalizeGeminiThinkingLevel(item.thinkingLevel) : '',
+      reasoningEffort: item.reasoningEffort ? normalizeOpenAIReasoningEffort(item.reasoningEffort) : '',
     }];
   })) as AnthropicOutputOptions;
 }
@@ -97,12 +86,11 @@ function snapshotProviderSettings(s: SettingsState) {
     maxConcurrency: s.maxConcurrency,
     temperatureEnabled: s.temperatureEnabled,
     temperatures: normalizeTemperatures(s.provider, s.temperatures),
-    anthropicOptionsEnabled: s.anthropicOptionsEnabled,
-    outputOptionsEnabled: s.outputOptionsEnabled,
     anthropicEffort: normalizeAnthropicEffort(s.anthropicEffort),
-    anthropicThinkingEnabled: s.anthropicThinkingEnabled,
     anthropicMaxTokens: normalizeAnthropicMaxTokens(s.anthropicMaxTokens),
-    anthropicOutputOptions: normalizeAnthropicOutputOptions(s.anthropicOutputOptions, s),
+    outputThinkingLevel: normalizeGeminiThinkingLevel(s.outputThinkingLevel),
+    outputReasoningEffort: normalizeOpenAIReasoningEffort(s.outputReasoningEffort),
+    anthropicOutputOptions: normalizeAnthropicOutputOptions(s.anthropicOutputOptions),
   };
 }
 
@@ -116,12 +104,11 @@ export function useSettingsController() {
     maxConcurrency: 5,
     temperatureEnabled: false,
     temperatures: defaultTemperatures('anthropic'),
-    anthropicOptionsEnabled: false,
-    outputOptionsEnabled: false,
     anthropicEffort: 'high',
-    anthropicThinkingEnabled: false,
     anthropicMaxTokens: 8192,
-    anthropicOutputOptions: defaultAnthropicOutputOptions('anthropic'),
+    outputThinkingLevel: 'medium',
+    outputReasoningEffort: 'medium',
+    anthropicOutputOptions: defaultAnthropicOutputOptions(),
     providerSettings: {},
     loggingEnabled: true,
     artifactStripIntroBlocks: true,
@@ -154,12 +141,11 @@ export function useSettingsController() {
         providerSettings: data.providerSettings || {},
         temperatureEnabled: data.temperatureEnabled === true,
         temperatures: normalizeTemperatures(provider, data.temperatures),
-        anthropicOptionsEnabled: data.anthropicOptionsEnabled === true,
-        outputOptionsEnabled: data.outputOptionsEnabled === true,
         anthropicEffort: normalizeAnthropicEffort(data.anthropicEffort),
-        anthropicThinkingEnabled: data.anthropicThinkingEnabled === true,
         anthropicMaxTokens: normalizeAnthropicMaxTokens(data.anthropicMaxTokens),
-        anthropicOutputOptions: normalizeAnthropicOutputOptions(data.anthropicOutputOptions, data, provider, data.model || ''),
+        outputThinkingLevel: normalizeGeminiThinkingLevel(data.outputThinkingLevel),
+        outputReasoningEffort: normalizeOpenAIReasoningEffort(data.outputReasoningEffort),
+        anthropicOutputOptions: normalizeAnthropicOutputOptions(data.anthropicOutputOptions),
         artifactStripIntroBlocks: data.artifactStripIntroBlocks !== false,
         artifactStripIntroBlocksDeprecated: data.artifactStripIntroBlocksDeprecated === true,
         pdfRedactionTopCm: Math.max(0, Math.min(30, Number(data.pdfRedactionTopCm) || 0)),
@@ -220,12 +206,11 @@ export function useSettingsController() {
       maxConcurrency: s.providerSettings?.[provider]?.maxConcurrency ?? (provider === 'openai-compatible' ? 1 : 5),
       temperatureEnabled: s.providerSettings?.[provider]?.temperatureEnabled === true,
       temperatures: normalizeTemperatures(provider, s.providerSettings?.[provider]?.temperatures),
-      anthropicOptionsEnabled: s.providerSettings?.[provider]?.anthropicOptionsEnabled === true,
-      outputOptionsEnabled: s.providerSettings?.[provider]?.outputOptionsEnabled === true,
       anthropicEffort: normalizeAnthropicEffort(s.providerSettings?.[provider]?.anthropicEffort),
-      anthropicThinkingEnabled: s.providerSettings?.[provider]?.anthropicThinkingEnabled === true,
       anthropicMaxTokens: normalizeAnthropicMaxTokens(s.providerSettings?.[provider]?.anthropicMaxTokens),
-      anthropicOutputOptions: normalizeAnthropicOutputOptions(s.providerSettings?.[provider]?.anthropicOutputOptions, s.providerSettings?.[provider], provider, nextModel),
+      outputThinkingLevel: normalizeGeminiThinkingLevel(s.providerSettings?.[provider]?.outputThinkingLevel),
+      outputReasoningEffort: normalizeOpenAIReasoningEffort(s.providerSettings?.[provider]?.outputReasoningEffort),
+      anthropicOutputOptions: normalizeAnthropicOutputOptions(s.providerSettings?.[provider]?.anthropicOutputOptions),
     }));
     nextApiKey = settings.apiKeys?.[provider] || '';
     setCompatibleModels([]);
@@ -249,12 +234,11 @@ export function useSettingsController() {
     maxConcurrency: value.maxConcurrency,
     temperatureEnabled: value.temperatureEnabled,
     temperatures: normalizeTemperatures(value.provider, value.temperatures),
-    anthropicOptionsEnabled: value.anthropicOptionsEnabled,
-    outputOptionsEnabled: value.outputOptionsEnabled,
     anthropicEffort: normalizeAnthropicEffort(value.anthropicEffort),
-    anthropicThinkingEnabled: value.anthropicThinkingEnabled,
     anthropicMaxTokens: normalizeAnthropicMaxTokens(value.anthropicMaxTokens),
-    anthropicOutputOptions: normalizeAnthropicOutputOptions(value.anthropicOutputOptions, value, value.provider, value.model),
+    outputThinkingLevel: normalizeGeminiThinkingLevel(value.outputThinkingLevel),
+    outputReasoningEffort: normalizeOpenAIReasoningEffort(value.outputReasoningEffort),
+    anthropicOutputOptions: normalizeAnthropicOutputOptions(value.anthropicOutputOptions),
     providerSettings: value.providerSettings?.[value.provider],
   });
 
@@ -278,8 +262,7 @@ export function useSettingsController() {
     try {
       const payload = withCurrentProviderSettings(settings);
       const invalidAnthropicMaxTokens = ['anthropic', 'gemini', 'openai'].includes(payload.provider)
-        && payload.outputOptionsEnabled
-        && Object.values(payload.anthropicOutputOptions).some((option) => option.maxTokens === '');
+        && payload.anthropicMaxTokens === '';
       if (invalidAnthropicMaxTokens) {
         alert('Claude max token을 입력해주세요.');
         return;
@@ -360,22 +343,6 @@ export function useSettingsController() {
     }));
   };
 
-  const handleAnthropicOptionsEnabledChange = (value: boolean) => {
-    setTestResult(null);
-    setTestedSignature('');
-    setSettings((s) => ({
-      ...s,
-      anthropicOptionsEnabled: value,
-      providerSettings: {
-        ...s.providerSettings,
-        [s.provider]: {
-          ...snapshotProviderSettings(s),
-          anthropicOptionsEnabled: value,
-        },
-      },
-    }));
-  };
-
   const handleAnthropicEffortChange = (value: AnthropicEffort) => {
     setTestResult(null);
     setTestedSignature('');
@@ -388,22 +355,6 @@ export function useSettingsController() {
         [s.provider]: {
           ...snapshotProviderSettings(s),
           anthropicEffort: effort,
-        },
-      },
-    }));
-  };
-
-  const handleAnthropicThinkingEnabledChange = (value: boolean) => {
-    setTestResult(null);
-    setTestedSignature('');
-    setSettings((s) => ({
-      ...s,
-      anthropicThinkingEnabled: value,
-      providerSettings: {
-        ...s.providerSettings,
-        [s.provider]: {
-          ...snapshotProviderSettings(s),
-          anthropicThinkingEnabled: value,
         },
       },
     }));
@@ -425,59 +376,38 @@ export function useSettingsController() {
     }));
   };
 
-  const handleOutputOptionsEnabledChange = (value: boolean) => {
+  const handleOutputThinkingLevelChange = (value: GeminiThinkingLevel) => {
     setTestResult(null);
     setTestedSignature('');
-    setSettings((s) => {
-      const anthropicOutputOptions = value
-        ? normalizeAnthropicOutputOptions(s.anthropicOutputOptions, s, s.provider, s.model)
-        : s.anthropicOutputOptions;
-      return {
-        ...s,
-        outputOptionsEnabled: value,
-        anthropicOutputOptions,
-        providerSettings: {
-          ...s.providerSettings,
-          [s.provider]: {
-            ...snapshotProviderSettings(s),
-            outputOptionsEnabled: value,
-            anthropicOutputOptions,
-          },
-        },
-      };
-    });
+    setSettings((s) => ({ ...s, outputThinkingLevel: normalizeGeminiThinkingLevel(value) }));
   };
 
-  const handleAnthropicTaskEffortChange = (key: AnthropicOutputTask, value: AnthropicEffort) => {
+  const handleOutputReasoningEffortChange = (value: OpenAIReasoningEffort) => {
+    setTestResult(null);
+    setTestedSignature('');
+    setSettings((s) => ({ ...s, outputReasoningEffort: normalizeOpenAIReasoningEffort(value) }));
+  };
+
+  const handleAnthropicTaskModelChange = (key: AnthropicOutputTask, value: string) => {
+    setTestResult(null);
+    setTestedSignature('');
+    setSettings((s) => ({
+      ...s,
+      anthropicOutputOptions: normalizeAnthropicOutputOptions({
+        ...s.anthropicOutputOptions,
+        [key]: { ...s.anthropicOutputOptions[key], model: value },
+      }),
+    }));
+  };
+
+  const handleAnthropicTaskEffortChange = (key: AnthropicOutputTask, value: AnthropicEffort | '') => {
     setTestResult(null);
     setTestedSignature('');
     setSettings((s) => {
       const anthropicOutputOptions = normalizeAnthropicOutputOptions({
         ...s.anthropicOutputOptions,
-        [key]: { ...s.anthropicOutputOptions[key], effort: normalizeAnthropicEffort(value) },
-      }, s, s.provider, s.model);
-      return {
-        ...s,
-        anthropicOutputOptions,
-        providerSettings: {
-          ...s.providerSettings,
-          [s.provider]: {
-            ...snapshotProviderSettings(s),
-            anthropicOutputOptions,
-          },
-        },
-      };
-    });
-  };
-
-  const handleAnthropicTaskThinkingEnabledChange = (key: AnthropicOutputTask, value: boolean) => {
-    setTestResult(null);
-    setTestedSignature('');
-    setSettings((s) => {
-      const anthropicOutputOptions = normalizeAnthropicOutputOptions({
-        ...s.anthropicOutputOptions,
-        [key]: { ...s.anthropicOutputOptions[key], thinkingEnabled: value },
-      }, s, s.provider, s.model);
+        [key]: { ...s.anthropicOutputOptions[key], effort: value ? normalizeAnthropicEffort(value) : '' },
+      });
       return {
         ...s,
         anthropicOutputOptions,
@@ -499,7 +429,7 @@ export function useSettingsController() {
       const anthropicOutputOptions = normalizeAnthropicOutputOptions({
         ...s.anthropicOutputOptions,
         [key]: { ...s.anthropicOutputOptions[key], maxTokens: value },
-      }, s, s.provider, s.model);
+      });
       return {
         ...s,
         anthropicOutputOptions,
@@ -514,14 +444,14 @@ export function useSettingsController() {
     });
   };
 
-  const handleGeminiTaskThinkingLevelChange = (key: AnthropicOutputTask, value: GeminiThinkingLevel) => {
+  const handleGeminiTaskThinkingLevelChange = (key: AnthropicOutputTask, value: GeminiThinkingLevel | '') => {
     setTestResult(null);
     setTestedSignature('');
     setSettings((s) => {
       const anthropicOutputOptions = normalizeAnthropicOutputOptions({
         ...s.anthropicOutputOptions,
-        [key]: { ...s.anthropicOutputOptions[key], thinkingLevel: normalizeGeminiThinkingLevel(value) },
-      }, s, s.provider, s.model);
+        [key]: { ...s.anthropicOutputOptions[key], thinkingLevel: value ? normalizeGeminiThinkingLevel(value) : '' },
+      });
       return {
         ...s,
         anthropicOutputOptions,
@@ -536,14 +466,14 @@ export function useSettingsController() {
     });
   };
 
-  const handleOpenAITaskReasoningEffortChange = (key: AnthropicOutputTask, value: OpenAIReasoningEffort) => {
+  const handleOpenAITaskReasoningEffortChange = (key: AnthropicOutputTask, value: OpenAIReasoningEffort | '') => {
     setTestResult(null);
     setTestedSignature('');
     setSettings((s) => {
       const anthropicOutputOptions = normalizeAnthropicOutputOptions({
         ...s.anthropicOutputOptions,
-        [key]: { ...s.anthropicOutputOptions[key], reasoningEffort: normalizeOpenAIReasoningEffort(value) },
-      }, s, s.provider, s.model);
+        [key]: { ...s.anthropicOutputOptions[key], reasoningEffort: value ? normalizeOpenAIReasoningEffort(value) : '' },
+      });
       return {
         ...s,
         anthropicOutputOptions,
@@ -556,10 +486,16 @@ export function useSettingsController() {
         },
       };
     });
+  };
+
+  const handleResetOutputOverrides = () => {
+    setTestResult(null);
+    setTestedSignature('');
+    setSettings((s) => ({ ...s, anthropicOutputOptions: defaultAnthropicOutputOptions() }));
   };
 
   const handleTest = async () => {
-    if ((settings.provider === 'anthropic' || settings.provider === 'gemini' || settings.provider === 'openai') && settings.outputOptionsEnabled && Object.values(settings.anthropicOutputOptions).some((option) => option.maxTokens === '')) {
+    if (['anthropic', 'gemini', 'openai'].includes(settings.provider) && settings.anthropicMaxTokens === '') {
       setTestResult({ ok: false, message: 'Claude max token을 입력해주세요.' });
       return;
     }
@@ -567,7 +503,7 @@ export function useSettingsController() {
     setTestResult(null);
     try {
       const payload = withCurrentProviderSettings({ ...settings, aiEnabled: true });
-      const r = await settingsApi.test(payload as unknown as Record<string, unknown>);
+      const r = await settingsApi.test({ ...payload, anthropicOutputOptions: defaultAnthropicOutputOptions() } as unknown as Record<string, unknown>);
       setTestedSignature(getConnectionSignature(payload));
       setTestResult({ ok: true, message: r.data.response });
     } catch (e: unknown) {
@@ -700,15 +636,15 @@ export function useSettingsController() {
     temperatureSupported: supportsTemperature(settings.provider, settings.model),
     handleTemperatureChange,
     handleTemperatureEnabledChange,
-    handleAnthropicOptionsEnabledChange,
     handleAnthropicEffortChange,
-    handleAnthropicThinkingEnabledChange,
     handleAnthropicMaxTokensChange,
-    handleOutputOptionsEnabledChange,
+    handleOutputThinkingLevelChange,
+    handleOutputReasoningEffortChange,
+    handleAnthropicTaskModelChange,
     handleAnthropicTaskEffortChange,
-    handleAnthropicTaskThinkingEnabledChange,
     handleAnthropicTaskMaxTokensChange,
     handleGeminiTaskThinkingLevelChange,
     handleOpenAITaskReasoningEffortChange,
+    handleResetOutputOverrides,
   };
 }

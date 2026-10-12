@@ -47,11 +47,15 @@ function collectAnthropicOutputOptionPairs(provider: string, options: unknown): 
   for (const task of ANTHROPIC_OUTPUT_TASKS) {
     const item = value[task];
     if (!item || typeof item !== 'object') continue;
-    if (item.effort !== undefined) pairs.push([`llm_anthropic_effort_${provider}_${task}`, sanitizeAnthropicEffort(item.effort)]);
-    if (item.thinkingEnabled !== undefined) pairs.push([`llm_anthropic_thinking_enabled_${provider}_${task}`, String(item.thinkingEnabled)]);
-    if (item.thinkingLevel !== undefined) pairs.push([`llm_output_thinking_level_${provider}_${task}`, String(item.thinkingLevel)]);
-    if (item.reasoningEffort !== undefined) pairs.push([`llm_output_reasoning_effort_${provider}_${task}`, String(item.reasoningEffort)]);
+    pairs.push([`llm_model_${provider}_${task}`, String(item.model || '')]);
+    pairs.push([`llm_anthropic_effort_${provider}_${task}`, item.effort ? sanitizeAnthropicEffort(item.effort) : '']);
+    pairs.push([`llm_output_thinking_level_${provider}_${task}`, String(item.thinkingLevel || '')]);
+    pairs.push([`llm_output_reasoning_effort_${provider}_${task}`, String(item.reasoningEffort || '')]);
     if (item.maxTokens !== undefined) {
+      if (String(item.maxTokens) === '') {
+        pairs.push([`llm_anthropic_max_tokens_${provider}_${task}`, '']);
+        continue;
+      }
       const maxTokens = parseInt(String(item.maxTokens), 10);
       if (!Number.isFinite(maxTokens) || maxTokens <= 0) throw new Error('Claude max token을 입력해주세요.');
       pairs.push([`llm_anthropic_max_tokens_${provider}_${task}`, String(maxTokens)]);
@@ -118,11 +122,10 @@ router.put('/', async (req: Request, res: Response) => {
     maxConcurrency,
     temperatureEnabled,
     temperatures,
-    outputOptionsEnabled,
-    anthropicOptionsEnabled,
     anthropicEffort,
-    anthropicThinkingEnabled,
     anthropicMaxTokens,
+    outputThinkingLevel,
+    outputReasoningEffort,
     anthropicOutputOptions,
     loggingEnabled,
     artifactStripIntroBlocks,
@@ -151,10 +154,10 @@ router.put('/', async (req: Request, res: Response) => {
     if (baseUrl !== undefined) pairs.push([`llm_base_url_${provider}`, String(baseUrl)]);
     if (concurrency != null) pairs.push([`llm_max_concurrency_${provider}`, String(concurrency)]);
     if (temperatureEnabled !== undefined) pairs.push([`llm_temperature_enabled_${provider}`, String(temperatureEnabled)]);
-    if (outputOptionsEnabled !== undefined) pairs.push([`llm_output_options_enabled_${provider}`, String(outputOptionsEnabled)]);
-    if (anthropicOptionsEnabled !== undefined) pairs.push([`llm_anthropic_options_enabled_${provider}`, String(anthropicOptionsEnabled)]);
     if (anthropicEffort !== undefined) pairs.push([`llm_anthropic_effort_${provider}`, sanitizeAnthropicEffort(anthropicEffort)]);
-    if (anthropicThinkingEnabled !== undefined) pairs.push([`llm_anthropic_thinking_enabled_${provider}`, String(anthropicThinkingEnabled)]);
+    if (outputThinkingLevel !== undefined) pairs.push([`llm_output_thinking_level_${provider}`, String(outputThinkingLevel)]);
+    if (outputReasoningEffort !== undefined) pairs.push([`llm_output_reasoning_effort_${provider}`, String(outputReasoningEffort)]);
+    if (anthropicOutputOptions !== undefined) pairs.push([`llm_output_options_enabled_${provider}`, 'true']);
     pairs.push(...collectAnthropicOutputOptionPairs(provider, anthropicOutputOptions));
     if (anthropicMaxTokens !== undefined) {
       const maxTokens = parseInt(String(anthropicMaxTokens), 10);
@@ -177,12 +180,11 @@ router.put('/', async (req: Request, res: Response) => {
         baseUrl?: unknown;
         maxConcurrency?: unknown;
         temperatureEnabled?: unknown;
-        outputOptionsEnabled?: unknown;
         temperatures?: Record<string, unknown>;
-        anthropicOptionsEnabled?: unknown;
         anthropicEffort?: unknown;
-        anthropicThinkingEnabled?: unknown;
         anthropicMaxTokens?: unknown;
+        outputThinkingLevel?: unknown;
+        outputReasoningEffort?: unknown;
         anthropicOutputOptions?: unknown;
       };
       if (item.model !== undefined) pairs.push([`llm_model_${p}`, String(item.model)]);
@@ -194,17 +196,17 @@ router.put('/', async (req: Request, res: Response) => {
       if (item.temperatureEnabled !== undefined) {
         pairs.push([`llm_temperature_enabled_${p}`, String(item.temperatureEnabled)]);
       }
-      if (item.outputOptionsEnabled !== undefined) {
-        pairs.push([`llm_output_options_enabled_${p}`, String(item.outputOptionsEnabled)]);
-      }
-      if (item.anthropicOptionsEnabled !== undefined) {
-        pairs.push([`llm_anthropic_options_enabled_${p}`, String(item.anthropicOptionsEnabled)]);
-      }
       if (item.anthropicEffort !== undefined) {
         pairs.push([`llm_anthropic_effort_${p}`, sanitizeAnthropicEffort(item.anthropicEffort)]);
       }
-      if (item.anthropicThinkingEnabled !== undefined) {
-        pairs.push([`llm_anthropic_thinking_enabled_${p}`, String(item.anthropicThinkingEnabled)]);
+      if (item.outputThinkingLevel !== undefined) {
+        pairs.push([`llm_output_thinking_level_${p}`, String(item.outputThinkingLevel)]);
+      }
+      if (item.outputReasoningEffort !== undefined) {
+        pairs.push([`llm_output_reasoning_effort_${p}`, String(item.outputReasoningEffort)]);
+      }
+      if (item.anthropicOutputOptions !== undefined) {
+        pairs.push([`llm_output_options_enabled_${p}`, 'true']);
       }
       pairs.push(...collectAnthropicOutputOptionPairs(p, item.anthropicOutputOptions));
       if (item.anthropicMaxTokens !== undefined) {
@@ -411,11 +413,10 @@ router.post('/test', async (req: Request, res: Response) => {
         maxConcurrency: Math.max(1, parseInt(String(body.maxConcurrency), 10) || 1),
         temperatureEnabled: body.temperatureEnabled === true,
         temperatures: body.temperatures || {},
-        anthropicOptionsEnabled: body.anthropicOptionsEnabled === true,
-        outputOptionsEnabled: body.outputOptionsEnabled === true,
         anthropicEffort: sanitizeAnthropicEffort(body.anthropicEffort),
-        anthropicThinkingEnabled: body.anthropicThinkingEnabled === true,
         anthropicMaxTokens: parseInt(String(body.anthropicMaxTokens), 10),
+        outputThinkingLevel: body.outputThinkingLevel || 'medium',
+        outputReasoningEffort: body.outputReasoningEffort || 'medium',
         anthropicOutputOptions: body.anthropicOutputOptions || {},
         providerSettings: body.providerSettings || {},
         sequentialMode: (parseInt(String(body.maxConcurrency), 10) || 1) <= 1,

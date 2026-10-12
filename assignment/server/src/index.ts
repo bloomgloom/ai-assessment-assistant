@@ -16,7 +16,7 @@ const teacherApp = express();
 const studentApp = express();
 const ADMIN_PORT = Number(process.env.ADMIN_PORT || process.env.PORT || 3002);
 const TEACHER_PORT = Number(process.env.TEACHER_PORT || ADMIN_PORT + 1);
-const STUDENT_PORT = Number(process.env.STUDENT_PORT || TEACHER_PORT + 1);
+const STUDENT_PORT = Number(process.env.STUDENT_PORT || 10000);
 const ADMIN_HOST = '127.0.0.1';
 const PUBLIC_HOST = process.env.HOST || '0.0.0.0';
 const ASSESSMENT_CLIENT_DIST = path.resolve(__dirname, '../../../assessment/client/dist');
@@ -551,16 +551,22 @@ app.get('/s/:shareCode', async (req, res) => {
 });
 
 teacherApp.get('/', async (req, res) => {
+  const studentUrl = `http://${localIps()[0] || '127.0.0.1'}:${STUDENT_PORT}`;
+  const studentLink = `<section class="card" style="margin-bottom:16px;text-align:center">
+    <div class="muted">학생 접속 주소</div>
+    <a href="${escapeHtml(studentUrl)}" target="_blank" rel="noopener" style="display:inline-block;margin-top:6px;font-size:32px;font-weight:800;word-break:break-all">${escapeHtml(studentUrl)}</a>
+  </section>`;
   const run = await currentOpenRun();
   if (!run) {
     return res.send(page('교사용 확인', `
 <header><strong>교사용 확인</strong><span class="danger">대기 중</span></header>
-<main><section class="card"><h2>진행 중인 수행이 없습니다</h2><p class="muted">수행이 시작되면 이 화면에 현황이 표시됩니다.</p></section></main>`));
+<main>${studentLink}<section class="card"><h2>진행 중인 수행이 없습니다</h2><p class="muted">수행이 시작되면 이 화면에 현황이 표시됩니다.</p></section></main>`));
   }
   if (!(await isTeacherAuthenticated(req, false))) {
     return res.send(page('교사용 확인', `
 <header><strong>교사용 확인</strong><span class="muted">비밀번호 필요</span></header>
 <main>
+  ${studentLink}
   <section class="card" style="max-width:420px;margin:40px auto">
     <h2>교사 비밀번호</h2>
     <form method="post" action="/auth">
@@ -573,7 +579,7 @@ teacherApp.get('/', async (req, res) => {
   }
   res.send(page(`${run.title} 제출 현황`, `
 <header><strong>${escapeHtml(run.title)} / ${escapeHtml(run.room)}</strong><div class="row"><span class="${run.is_open ? 'ok' : 'danger'}">${run.is_open ? '진행 중' : '종료'}</span><select id="sort"><option value="default">기본순</option><option value="recent">제출순</option></select></div></header>
-<main><div id="summary" class="summary"></div><div id="submissions"></div></main>
+<main>${studentLink}<div id="summary" class="summary"></div><div id="submissions"></div></main>
 <script>
 async function j(url,opt){const r=await fetch(url,opt);if(!r.ok)throw new Error(await r.text());return r.json();}
 function renderSummary(rows){const total=rows.length;const absent=rows.filter(s=>Number(s.is_absent||0)===1).length;const present=total-absent;const submitted=rows.filter(s=>Number(s.is_absent||0)!==1&&!!s.submission_id).length;const checked=rows.filter(s=>Number(s.is_absent||0)!==1&&(s.status==='accepted'||s.status==='no_file')&&Number(s.teacher_checked||0)===1).length;const done=present>0&&checked>=present;summary.className='summary '+(done?'summary-done':'');summary.innerHTML='<span>총원 '+total+'명</span><span>결시 '+absent+'명</span><span>실시 '+present+'명</span><span>제출 '+submitted+'명</span><span>확인 '+checked+'명</span>'+(done?'<strong class="complete-badge">전원 확인 완료</strong>':'');}

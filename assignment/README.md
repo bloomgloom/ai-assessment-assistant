@@ -20,7 +20,7 @@ npm run dev
 ```text
 수행 진행: http://127.0.0.1:3002       (localhost-only)
 교사 뷰어: http://<교사 PC IP>:3003   (LAN 공개)
-학생 화면: http://<교사 PC IP>:3004   (LAN 공개)
+학생 화면: http://<교사 PC IP>:10000  (LAN 공개)
 ```
 
 ## 환경변수 / 설정

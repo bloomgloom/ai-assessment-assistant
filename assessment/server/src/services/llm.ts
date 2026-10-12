@@ -12,11 +12,10 @@ export interface LLMSettings {
   maxConcurrency: number;
   temperatureEnabled: boolean;
   temperatures: AiTemperatures;
-  anthropicOptionsEnabled: boolean;
-  outputOptionsEnabled: boolean;
   anthropicEffort: AnthropicEffort;
-  anthropicThinkingEnabled: boolean;
   anthropicMaxTokens: number;
+  outputThinkingLevel: GeminiThinkingLevel;
+  outputReasoningEffort: OpenAIReasoningEffort;
   anthropicOutputOptions: AnthropicOutputOptions;
   providerSettings: Record<string, {
     model: string;
@@ -24,11 +23,10 @@ export interface LLMSettings {
     maxConcurrency: number;
     temperatureEnabled?: boolean;
     temperatures?: AiTemperatures;
-    anthropicOptionsEnabled?: boolean;
-    outputOptionsEnabled?: boolean;
     anthropicEffort?: AnthropicEffort;
-    anthropicThinkingEnabled?: boolean;
     anthropicMaxTokens?: number;
+    outputThinkingLevel?: GeminiThinkingLevel;
+    outputReasoningEffort?: OpenAIReasoningEffort;
     anthropicOutputOptions?: AnthropicOutputOptions;
   }>;
   // 호환용 필드: maxConcurrency <= 1이면 true
@@ -53,11 +51,11 @@ export type AnthropicOutputTask = 'domainManagement' | 'recordsScoring' | 'recor
 export type GeminiThinkingLevel = 'low' | 'medium' | 'high';
 export type OpenAIReasoningEffort = 'low' | 'medium' | 'high';
 export interface AnthropicOutputOption {
-  effort: AnthropicEffort;
-  thinkingEnabled: boolean;
-  maxTokens: number;
-  thinkingLevel: GeminiThinkingLevel;
-  reasoningEffort: OpenAIReasoningEffort;
+  model?: string;
+  effort?: AnthropicEffort;
+  maxTokens?: number;
+  thinkingLevel?: GeminiThinkingLevel;
+  reasoningEffort?: OpenAIReasoningEffort;
 }
 export type AnthropicOutputOptions = Record<AnthropicOutputTask, AnthropicOutputOption>;
 
@@ -91,48 +89,35 @@ function getProviderTemperatures(map: Record<string, string>, provider: string):
   };
 }
 
-function defaultAnthropicOutputOptions(): AnthropicOutputOptions {
-  return Object.fromEntries(ANTHROPIC_OUTPUT_TASKS.map((task) => [task, {
-    effort: 'high' as AnthropicEffort,
-    thinkingEnabled: false,
-    maxTokens: 8192,
-    thinkingLevel: 'medium' as GeminiThinkingLevel,
-    reasoningEffort: 'medium' as OpenAIReasoningEffort,
-  }])) as AnthropicOutputOptions;
-}
-
 function readAnthropicOutputOptions(map: Record<string, string>, provider: string): AnthropicOutputOptions {
   const aliases = providerSettingKey(provider);
-  const legacyEnabled = aliases.map((alias) => map[`llm_anthropic_options_enabled_${alias}`]).find((value) => value !== undefined) === 'true';
-  const legacyEffort = sanitizeAnthropicEffort(aliases.map((alias) => map[`llm_anthropic_effort_${alias}`]).find((value) => value !== undefined));
-  const legacyThinkingEnabled = aliases.map((alias) => map[`llm_anthropic_thinking_enabled_${alias}`]).find((value) => value !== undefined) === 'true';
-  const defaults = defaultAnthropicOutputOptions();
+  if (!aliases.some((alias) => map[`llm_output_options_enabled_${alias}`] === 'true')) {
+    return Object.fromEntries(ANTHROPIC_OUTPUT_TASKS.map((task) => [task, {}])) as AnthropicOutputOptions;
+  }
   return Object.fromEntries(ANTHROPIC_OUTPUT_TASKS.map((task) => {
+    const model = aliases.map((alias) => map[`llm_model_${alias}_${task}`]).find((value) => value !== undefined);
     const effort = aliases.map((alias) => map[`llm_anthropic_effort_${alias}_${task}`]).find((value) => value !== undefined);
-    const thinkingEnabled = aliases.map((alias) => map[`llm_anthropic_thinking_enabled_${alias}_${task}`]).find((value) => value !== undefined);
     const maxTokens = aliases.map((alias) => map[`llm_anthropic_max_tokens_${alias}_${task}`]).find((value) => value !== undefined);
     const thinkingLevel = aliases.map((alias) => map[`llm_output_thinking_level_${alias}_${task}`]).find((value) => value !== undefined);
     const reasoningEffort = aliases.map((alias) => map[`llm_output_reasoning_effort_${alias}_${task}`]).find((value) => value !== undefined);
     return [task, {
-      effort: effort !== undefined ? sanitizeAnthropicEffort(effort) : legacyEnabled ? legacyEffort : defaults[task].effort,
-      thinkingEnabled: thinkingEnabled !== undefined ? thinkingEnabled === 'true' : legacyEnabled ? legacyThinkingEnabled : defaults[task].thinkingEnabled,
-      maxTokens: sanitizeAnthropicMaxTokens(maxTokens ?? map[`llm_anthropic_max_tokens_${provider}`]),
-      thinkingLevel: sanitizeThinkingLevel(thinkingLevel),
-      reasoningEffort: sanitizeOpenAIReasoningEffort(reasoningEffort),
+      ...(model ? { model } : {}),
+      ...(effort ? { effort: sanitizeAnthropicEffort(effort) } : {}),
+      ...(maxTokens ? { maxTokens: sanitizeAnthropicMaxTokens(maxTokens) } : {}),
+      ...(thinkingLevel ? { thinkingLevel: sanitizeThinkingLevel(thinkingLevel) } : {}),
+      ...(reasoningEffort ? { reasoningEffort: sanitizeOpenAIReasoningEffort(reasoningEffort) } : {}),
     }];
   })) as AnthropicOutputOptions;
 }
 
-function outputOptionsForTask(cfg: LLMSettings, task?: AnthropicOutputTask) {
-  if (!task) return { maxTokens: 8192 };
-  const option = cfg.anthropicOutputOptions?.[task];
-  if (!cfg.outputOptionsEnabled || !option) return { maxTokens: 8192 };
+export function outputOptionsForTask(cfg: LLMSettings, task?: AnthropicOutputTask) {
+  const option = task ? cfg.anthropicOutputOptions?.[task] : undefined;
   return {
-    effort: option.effort,
-    thinkingEnabled: option.thinkingEnabled,
-    maxTokens: option.maxTokens,
-    thinkingLevel: option.thinkingLevel,
-    reasoningEffort: option.reasoningEffort,
+    model: option?.model || cfg.model,
+    effort: option?.effort ?? cfg.anthropicEffort,
+    maxTokens: option?.maxTokens ?? cfg.anthropicMaxTokens,
+    thinkingLevel: option?.thinkingLevel ?? cfg.outputThinkingLevel,
+    reasoningEffort: option?.reasoningEffort ?? cfg.outputReasoningEffort,
   };
 }
 
@@ -270,11 +255,10 @@ export async function getLLMSettings(): Promise<LLMSettings> {
         : (p === provider ? maxConcurrency : p === 'openai-compatible' ? 1 : 5),
       temperatureEnabled: map[`llm_temperature_enabled_${p}`] === 'true',
       temperatures: getProviderTemperatures(map, p),
-      anthropicOptionsEnabled: map[`llm_anthropic_options_enabled_${p}`] === 'true',
-      outputOptionsEnabled: map[`llm_output_options_enabled_${p}`] === 'true',
       anthropicEffort: sanitizeAnthropicEffort(map[`llm_anthropic_effort_${p}`]),
-      anthropicThinkingEnabled: map[`llm_anthropic_thinking_enabled_${p}`] === 'true',
       anthropicMaxTokens: sanitizeAnthropicMaxTokens(map[`llm_anthropic_max_tokens_${p}`]),
+      outputThinkingLevel: sanitizeThinkingLevel(map[`llm_output_thinking_level_${p}`]),
+      outputReasoningEffort: sanitizeOpenAIReasoningEffort(map[`llm_output_reasoning_effort_${p}`]),
       anthropicOutputOptions: readAnthropicOutputOptions(map, p),
     }];
   }));
@@ -292,11 +276,10 @@ export async function getLLMSettings(): Promise<LLMSettings> {
     maxConcurrency: activeMaxConcurrency,
     temperatureEnabled: activeProviderSettings.temperatureEnabled === true,
     temperatures: activeProviderSettings.temperatures || getProviderTemperatures(map, provider),
-    anthropicOptionsEnabled: activeProviderSettings.anthropicOptionsEnabled === true,
-    outputOptionsEnabled: activeProviderSettings.outputOptionsEnabled === true,
     anthropicEffort: sanitizeAnthropicEffort(activeProviderSettings.anthropicEffort),
-    anthropicThinkingEnabled: activeProviderSettings.anthropicThinkingEnabled === true,
     anthropicMaxTokens: sanitizeAnthropicMaxTokens(activeProviderSettings.anthropicMaxTokens),
+    outputThinkingLevel: sanitizeThinkingLevel(activeProviderSettings.outputThinkingLevel),
+    outputReasoningEffort: sanitizeOpenAIReasoningEffort(activeProviderSettings.outputReasoningEffort),
     anthropicOutputOptions: activeProviderSettings.anthropicOutputOptions || readAnthropicOutputOptions(map, provider),
     providerSettings,
     sequentialMode: activeMaxConcurrency <= 1,
@@ -332,8 +315,15 @@ export async function fetchAnthropicModels(apiKey: string): Promise<string[]> {
     signal: AbortSignal.timeout(5000),
   });
   if (!res.ok) throw new Error(`Claude 모델 목록 조회 실패 (${res.status}): ${await res.text()}`);
-  const data = (await res.json()) as { data?: { id?: string }[] };
-  return (data.data || []).map((m) => m.id).filter((id): id is string => Boolean(id));
+  const data = (await res.json()) as { data?: { id?: string; created_at?: string }[] };
+  return filterAnthropicModelsByReleaseDate(data.data || []);
+}
+
+export function filterAnthropicModelsByReleaseDate(models: { id?: string; created_at?: string }[]): string[] {
+  const cutoff = Date.parse('2026-09-01T00:00:00Z');
+  return models
+    .filter((model) => Boolean(model.id) && Date.parse(model.created_at || '') >= cutoff)
+    .map((model) => model.id as string);
 }
 
 export async function fetchGeminiModels(apiKey: string): Promise<string[]> {
@@ -425,7 +415,6 @@ async function writeLLMLog(params: {
   settings: LLMSettings;
   temperature?: number;
   anthropicEffort?: AnthropicEffort;
-  anthropicThinkingEnabled?: boolean;
   anthropicPromptCachingEnabled?: boolean;
   anthropicCachePrefixChars?: number;
   prompt: string;
@@ -456,7 +445,6 @@ async function writeLLMLog(params: {
       `base_url: ${params.settings.baseUrl || '(default)'}`,
       `temperature: ${params.temperature ?? '(default)'}`,
       `anthropic_effort: ${params.anthropicEffort ?? '(default)'}`,
-      `anthropic_thinking: ${params.anthropicThinkingEnabled === undefined ? '(default)' : String(params.anthropicThinkingEnabled)}`,
       `anthropic_prompt_caching: ${params.anthropicPromptCachingEnabled === undefined ? '(default)' : String(params.anthropicPromptCachingEnabled)}`,
       `anthropic_cache_prefix_chars: ${params.anthropicCachePrefixChars ?? 0}`,
       '',
@@ -587,12 +575,12 @@ export async function callLLM(
     throw new Error('AI 기능이 꺼져 있습니다. 환경 설정에서 AI 기능 사용을 켜세요.');
   }
   const startedAt = new Date();
-  const requestTemperature = cfg.temperatureEnabled && supportsTemperature(cfg.provider, cfg.model)
+  const taskOptions = outputOptionsForTask(cfg, anthropicTask);
+  const requestCfg = taskOptions.model === cfg.model ? cfg : { ...cfg, model: taskOptions.model };
+  const requestTemperature = requestCfg.temperatureEnabled && supportsTemperature(requestCfg.provider, requestCfg.model)
     ? clampTemperatureForProvider(cfg.provider, temperature)
     : undefined;
-  const taskOptions = outputOptionsForTask(cfg, anthropicTask);
   const anthropicEffort = taskOptions.effort;
-  const anthropicThinkingEnabled = taskOptions.thinkingEnabled;
   const anthropicPromptCachingEnabled = cfg.provider === 'anthropic' ? true : undefined;
   const requestPrompt = outputSchema && cfg.provider !== 'anthropic'
     ? promptWithJsonSchema(prompt, outputSchema)
@@ -600,19 +588,19 @@ export async function callLLM(
 
   try {
     let result: LLMCallResult;
-    if (cfg.provider === 'openai-compatible') result = await callOpenAICompatible(requestPrompt, cfg, signal, attachments, requestTemperature);
-    else if (cfg.provider === 'ollama') result = await callOllama(requestPrompt, cfg, signal, attachments, requestTemperature);
-    else if (cfg.provider === 'anthropic') result = await callAnthropic(requestPrompt, cfg, signal, attachments, requestTemperature, anthropicEffort, anthropicThinkingEnabled, anthropicPromptCachingEnabled, cachePrefix, outputSchema, anthropicTask);
-    else if (cfg.provider === 'gemini') result = await callGemini(requestPrompt, cfg, signal, attachments, requestTemperature, taskOptions);
-    else result = await callOpenAI(requestPrompt, cfg, signal, attachments, requestTemperature, taskOptions);
+    if (requestCfg.provider === 'openai-compatible') result = await callOpenAICompatible(requestPrompt, requestCfg, signal, attachments, requestTemperature);
+    else if (requestCfg.provider === 'ollama') result = await callOllama(requestPrompt, requestCfg, signal, attachments, requestTemperature);
+    else if (requestCfg.provider === 'anthropic') result = await callAnthropic(requestPrompt, requestCfg, signal, attachments, requestTemperature, anthropicEffort, anthropicPromptCachingEnabled, cachePrefix, outputSchema, anthropicTask);
+    else if (requestCfg.provider === 'gemini') result = await callGemini(requestPrompt, requestCfg, signal, attachments, requestTemperature, taskOptions);
+    else result = await callOpenAI(requestPrompt, requestCfg, signal, attachments, requestTemperature, taskOptions);
 
     if (cfg.loggingEnabled) {
-      await writeLLMLog({ startedAt, finishedAt: new Date(), settings: cfg, prompt: requestPrompt, attachments, requestJson: result.requestJson, responseJson: result.responseJson, output: result.text, thinkingSummary: result.thinkingSummary, log, temperature: requestTemperature, anthropicEffort, anthropicThinkingEnabled, anthropicPromptCachingEnabled, anthropicCachePrefixChars: cachePrefix?.length });
+      await writeLLMLog({ startedAt, finishedAt: new Date(), settings: requestCfg, prompt: requestPrompt, attachments, requestJson: result.requestJson, responseJson: result.responseJson, output: result.text, thinkingSummary: result.thinkingSummary, log, temperature: requestTemperature, anthropicEffort, anthropicPromptCachingEnabled, anthropicCachePrefixChars: cachePrefix?.length });
     }
     return result.text;
   } catch (error) {
     if (cfg.loggingEnabled) {
-      await writeLLMLog({ startedAt, finishedAt: new Date(), settings: cfg, prompt: requestPrompt, attachments, error, log, temperature: requestTemperature, anthropicEffort, anthropicThinkingEnabled, anthropicPromptCachingEnabled, anthropicCachePrefixChars: cachePrefix?.length });
+      await writeLLMLog({ startedAt, finishedAt: new Date(), settings: requestCfg, prompt: requestPrompt, attachments, error, log, temperature: requestTemperature, anthropicEffort, anthropicPromptCachingEnabled, anthropicCachePrefixChars: cachePrefix?.length });
     }
     throw error;
   }
@@ -646,7 +634,7 @@ async function callOpenAI(prompt: string, cfg: LLMSettings, signal?: AbortSignal
     messages: [{ role: 'user', content: buildOpenAIContent(prompt, attachments) }],
     ...(temperature !== undefined ? { temperature } : {}),
     max_completion_tokens: sanitizeAnthropicMaxTokens(outputOptions.maxTokens),
-    ...(cfg.outputOptionsEnabled && outputOptions.reasoningEffort ? { reasoning_effort: outputOptions.reasoningEffort } : {}),
+    ...(outputOptions.reasoningEffort ? { reasoning_effort: outputOptions.reasoningEffort } : {}),
   };
 
   const res = await fetch(`${baseUrl}/chat/completions`, {
@@ -674,7 +662,7 @@ function buildAnthropicContent(prompt: string, attachments: LLMImageAttachment[]
   if (cached.prefix) {
     return {
       system: [
-        { type: 'text', text: cached.prefix, cache_control: { type: 'ephemeral' } },
+        { type: 'text', text: cached.prefix, cache_control: { type: 'ephemeral', ttl: '1h' } },
       ],
       content: [
         ...(cached.dynamic ? [{ type: 'text', text: cached.dynamic }] : [{ type: 'text', text: '응답을 생성하세요.' }]),
@@ -687,7 +675,7 @@ function buildAnthropicContent(prompt: string, attachments: LLMImageAttachment[]
   if (promptCachingEnabled === true) {
     return {
       system: [
-        { type: 'text', text: prompt, cache_control: { type: 'ephemeral' } },
+        { type: 'text', text: prompt, cache_control: { type: 'ephemeral', ttl: '1h' } },
       ],
       content: [
         { type: 'text', text: '응답을 생성하세요.' },
@@ -715,13 +703,12 @@ export function buildAnthropicMessageParams(
   outputSchema?: AnthropicJsonSchema,
   anthropicTask?: AnthropicOutputTask,
 ): Record<string, unknown> {
-  const model = cfg.model || 'claude-sonnet-5';
-  const requestTemperature = cfg.temperatureEnabled && supportsTemperature(cfg.provider, cfg.model)
+  const taskOptions = outputOptionsForTask(cfg, anthropicTask);
+  const model = taskOptions.model || cfg.model;
+  const requestTemperature = cfg.temperatureEnabled && supportsTemperature(cfg.provider, model)
     ? clampTemperatureForProvider(cfg.provider, temperature)
     : undefined;
-  const taskOptions = outputOptionsForTask(cfg, anthropicTask);
   const effort = taskOptions.effort;
-  const thinkingEnabled = taskOptions.thinkingEnabled;
   const maxTokens = taskOptions.maxTokens ?? 8192;
   const { system, content } = buildAnthropicContent(prompt, attachments, true, cachePrefix);
   const outputConfig = {
@@ -733,13 +720,6 @@ export function buildAnthropicMessageParams(
     max_tokens: sanitizeAnthropicMaxTokens(maxTokens),
     ...(requestTemperature !== undefined ? { temperature: requestTemperature } : {}),
     ...(Object.keys(outputConfig).length ? { output_config: outputConfig } : {}),
-    ...(thinkingEnabled !== undefined
-      ? {
-          thinking: thinkingEnabled
-            ? { type: 'adaptive', display: 'summarized' }
-            : { type: 'disabled' },
-        }
-      : {}),
     ...(system ? { system } : {}),
     messages: [{ role: 'user', content }],
   };
@@ -752,7 +732,6 @@ async function callAnthropic(
   attachments: LLMImageAttachment[] = [],
   temperature?: number,
   effort?: AnthropicEffort,
-  thinkingEnabled?: boolean,
   promptCachingEnabled?: boolean,
   cachePrefix?: string,
   outputSchema?: AnthropicJsonSchema,
@@ -761,9 +740,7 @@ async function callAnthropic(
   const params = buildAnthropicMessageParams(prompt, {
     ...cfg,
     temperatureEnabled: temperature !== undefined,
-    anthropicOptionsEnabled: effort !== undefined || thinkingEnabled !== undefined,
     anthropicEffort: effort || cfg.anthropicEffort,
-    anthropicThinkingEnabled: thinkingEnabled === true,
     anthropicMaxTokens: cfg.anthropicMaxTokens,
   }, attachments, temperature, promptCachingEnabled === true ? cachePrefix : undefined, outputSchema, anthropicTask);
   const res = await fetch('https://api.anthropic.com/v1/messages', {
@@ -919,7 +896,7 @@ async function callGemini(prompt: string, cfg: LLMSettings, signal?: AbortSignal
   const generationConfig = {
     ...(temperature !== undefined ? { temperature } : {}),
     maxOutputTokens: sanitizeAnthropicMaxTokens(outputOptions.maxTokens),
-    ...(cfg.outputOptionsEnabled && outputOptions.thinkingLevel
+    ...(outputOptions.thinkingLevel
       ? { thinkingConfig: { thinkingBudget: geminiThinkingBudget(outputOptions.thinkingLevel) } }
       : {}),
   };
