@@ -1,12 +1,10 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { execFile } from 'child_process';
-import { promisify } from 'util';
 import { PDFDocument } from 'pdf-lib';
 import { PNG } from 'pngjs';
+import { runPdftoppm } from './pdfRenderer';
 
-const execFileAsync = promisify(execFile);
 const RENDER_DPI = 200;
 
 function clampTopHeightCm(value: number): number {
@@ -31,7 +29,7 @@ function fillTopPixelsWhite(pngBuffer: Buffer, topHeightRatio: number): Buffer {
 
 async function renderFirstPageToPng(inputPath: string, outputPrefix: string): Promise<string> {
   try {
-    await execFileAsync('pdftoppm', [
+    await runPdftoppm([
       '-f', '1',
       '-l', '1',
       '-r', String(RENDER_DPI),

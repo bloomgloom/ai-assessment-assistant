@@ -2,12 +2,10 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import crypto from 'crypto';
-import { execFile } from 'child_process';
-import { promisify } from 'util';
 import { UPLOADS_DIR, ensureDir } from './storage';
 import { redactPdfFirstPageTop } from './pdfRedaction';
+import { runPdftoppm } from './pdfRenderer';
 
-const execFileAsync = promisify(execFile);
 const PDF_RENDER_DPI = 150;
 const PDF_JPEG_QUALITY = 82;
 const CACHE_DIR = path.join(UPLOADS_DIR, 'llm-cache', 'pdf-images');
@@ -42,7 +40,7 @@ function pdfCacheKey(pdfPath: string, topHeightCm: number): string {
 async function renderPdfToJpegFiles(pdfPath: string, outputDir: string): Promise<void> {
   ensureDir(outputDir);
   const prefix = path.join(outputDir, 'page');
-  await execFileAsync('pdftoppm', [
+  await runPdftoppm([
     '-r', String(PDF_RENDER_DPI),
     '-jpeg',
     '-jpegopt', `quality=${PDF_JPEG_QUALITY}`,

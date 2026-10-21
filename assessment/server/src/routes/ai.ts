@@ -883,7 +883,7 @@ async function appendArtifactContents(
         if (pdfAttachments.length > 0) hasContent = true;
       } catch (e) {
         const message = e instanceof Error ? e.message : String(e);
-        parts.push(`[${promptLabel}] (PDF 이미지 변환 실패: ${message})\n---`);
+        throw new Error(`${promptLabel}의 PDF 이미지 변환에 실패했습니다. 채점을 중단했습니다. ${message}`);
       }
     }
   }

@@ -196,6 +196,12 @@ function getBundledPythonPath() {
   return candidates.find((candidate) => fs.existsSync(candidate)) || '';
 }
 
+function getDesktopProcessPath() {
+  const current = process.env.PATH || '';
+  if (process.platform !== 'darwin') return current;
+  return ['/opt/homebrew/bin', '/usr/local/bin', current].filter(Boolean).join(path.delimiter);
+}
+
 function waitForServer(url, timeoutMs = 15000) {
   const startedAt = Date.now();
 
@@ -287,6 +293,7 @@ async function startAssessmentServer() {
     cwd: app.getPath('userData'),
     env: {
       ...process.env,
+      PATH: getDesktopProcessPath(),
       HOST: ASSESSMENT_HOST,
       PORT: String(assessmentPort),
       APP_STORAGE_DIR: storageDir,
