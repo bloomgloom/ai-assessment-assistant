@@ -38,6 +38,7 @@ export async function initAssignmentDb(): Promise<void> {
       domain_name TEXT NOT NULL,
       title TEXT NOT NULL DEFAULT '',
       guide_md TEXT NOT NULL DEFAULT '',
+      guide_url TEXT NOT NULL DEFAULT '',
       allowed_extensions TEXT NOT NULL DEFAULT '',
       max_file_size_mb INTEGER NOT NULL DEFAULT 50,
       max_files INTEGER NOT NULL DEFAULT 1,
@@ -55,6 +56,7 @@ export async function initAssignmentDb(): Promise<void> {
       filepath TEXT NOT NULL,
       mime_type TEXT NOT NULL DEFAULT '',
       size INTEGER NOT NULL DEFAULT 0,
+      source_url TEXT NOT NULL DEFAULT '',
       uploaded_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
     );
 
@@ -89,6 +91,15 @@ export async function initAssignmentDb(): Promise<void> {
       is_open INTEGER NOT NULL DEFAULT 1,
       started_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
       ended_at TEXT DEFAULT ''
+    );
+    CREATE TABLE IF NOT EXISTS assignment_run_resources (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      run_id INTEGER NOT NULL REFERENCES assignment_runs(id) ON DELETE CASCADE,
+      filename TEXT NOT NULL,
+      filepath TEXT NOT NULL,
+      mime_type TEXT NOT NULL DEFAULT '',
+      size INTEGER NOT NULL DEFAULT 0,
+      source_url TEXT NOT NULL DEFAULT ''
     );
 
     CREATE TABLE IF NOT EXISTS assignment_run_students (
@@ -144,6 +155,7 @@ export async function initAssignmentDb(): Promise<void> {
 
   await ensureColumn('assignment_configs', 'title', "TEXT NOT NULL DEFAULT ''");
   await ensureColumn('assignment_configs', 'guide_md', "TEXT NOT NULL DEFAULT ''");
+  await ensureColumn('assignment_configs', 'guide_url', "TEXT NOT NULL DEFAULT ''");
   await ensureColumn('assignment_configs', 'allowed_extensions', "TEXT NOT NULL DEFAULT ''");
   await ensureColumn('assignment_configs', 'max_file_size_mb', "INTEGER NOT NULL DEFAULT 50");
   await ensureColumn('assignment_configs', 'max_files', "INTEGER NOT NULL DEFAULT 1");
@@ -153,6 +165,7 @@ export async function initAssignmentDb(): Promise<void> {
   await ensureColumn('assignment_configs', 'updated_at', "TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))");
   await ensureColumn('assignment_resources', 'mime_type', "TEXT NOT NULL DEFAULT ''");
   await ensureColumn('assignment_resources', 'size', "INTEGER NOT NULL DEFAULT 0");
+  await ensureColumn('assignment_resources', 'source_url', "TEXT NOT NULL DEFAULT ''");
   await ensureColumn('assignment_resources', 'uploaded_at', "TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))");
   await ensureColumn('assignment_classes', 'assessment_class_id', "INTEGER NOT NULL DEFAULT 0");
   await ensureColumn('assignment_classes', 'created_at', "TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))");
@@ -166,6 +179,7 @@ export async function initAssignmentDb(): Promise<void> {
   await ensureColumn('assignment_runs', 'is_open', "INTEGER NOT NULL DEFAULT 1");
   await ensureColumn('assignment_runs', 'started_at', "TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))");
   await ensureColumn('assignment_runs', 'ended_at', "TEXT DEFAULT ''");
+  await ensureColumn('assignment_runs', 'guide_md_snapshot', "TEXT NOT NULL DEFAULT ''");
   await ensureColumn('assignment_run_students', 'assignment_student_id', "INTEGER");
   await ensureColumn('assignment_run_students', 'assessment_student_id', "INTEGER NOT NULL DEFAULT 0");
   await ensureColumn('assignment_run_students', 'student_num', "INTEGER NOT NULL DEFAULT 0");

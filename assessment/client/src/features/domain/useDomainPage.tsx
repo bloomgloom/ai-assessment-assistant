@@ -196,6 +196,7 @@ export function useDomainPage() {
       saveAssignmentConfig: domain.saveAssignmentConfig,
       handleAssignmentGuideUpload: domain.handleAssignmentGuideUpload,
       handleAssignmentResourceUpload: domain.handleAssignmentResourceUpload,
+      addAssignmentResourceLink: domain.addAssignmentResourceLink,
       deleteAssignmentResource: domain.deleteAssignmentResource,
     },
   };

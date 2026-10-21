@@ -7,6 +7,7 @@ import { assignmentExecute, assignmentQueryAll, assignmentQueryOne, assignmentTr
 import { queryAll, queryOne } from '../services/db';
 import { UPLOADS_DIR, ensureDir, moveFileToTrash, resolveStoredPath, restoreTrashedFile, toStoredPath } from '../services/storage';
 import { decodeUploadFilename } from '../services/filename';
+import { fetchGithubSource, fetchGithubText, githubFetchUrl, remoteFilename } from '../services/remoteGithub';
 
 const router = Router();
 const RESOURCE_DIR = path.join(UPLOADS_DIR, 'assignment-resources');
@@ -259,9 +260,19 @@ router.get('/config', async (req: Request, res: Response) => {
   const configId = await ensureConfig(s);
   await syncAssignmentSnapshotsForScope(s, configId);
 
-  const config = await assignmentQueryOne('SELECT * FROM assignment_configs WHERE id=?', [configId]);
+  const config = await assignmentQueryOne<Record<string, unknown>>('SELECT * FROM assignment_configs WHERE id=?', [configId]);
+  if (config?.guide_url) {
+    try {
+      config.resolved_guide_md = await fetchGithubText(String(config.guide_url));
+    } catch (error) {
+      config.resolved_guide_md = String(config.guide_md || '');
+      config.guide_fetch_error = error instanceof Error ? error.message : String(error);
+    }
+  } else if (config) {
+    config.resolved_guide_md = String(config.guide_md || '');
+  }
   const resources = await assignmentQueryAll(
-    'SELECT id, filename, filepath, mime_type, size, uploaded_at FROM assignment_resources WHERE config_id=? ORDER BY uploaded_at DESC, id DESC',
+    'SELECT id, filename, filepath, mime_type, size, source_url, uploaded_at FROM assignment_resources WHERE config_id=? ORDER BY uploaded_at DESC, id DESC',
     [configId]
   );
   const classes = await assignmentQueryAll(
@@ -282,15 +293,24 @@ router.put('/config', async (req: Request, res: Response) => {
   const configId = await ensureConfig(s);
   await syncAssignmentSnapshotsForScope(s, configId);
   const title = `${s.subject} ${s.domainName}`;
-  const guideMd = String(req.body?.guide_md ?? '');
+  const guideUrl = String(req.body?.guide_url ?? '').trim();
+  let guideMd = String(req.body?.guide_md ?? '');
+  if (guideUrl) {
+    try {
+      githubFetchUrl(guideUrl);
+      guideMd = await fetchGithubText(guideUrl);
+    } catch (error) {
+      return res.status(400).json({ error: error instanceof Error ? error.message : String(error) });
+    }
+  }
   const allowedExtensions = normalizeAllowedExtensions(String(req.body?.allowed_extensions ?? ''));
   const maxFileSizeMb = Math.max(1, Number(req.body?.max_file_size_mb || 50));
   const maxFiles = Math.max(1, Number(req.body?.max_files || 1));
   await assignmentExecute(
     `UPDATE assignment_configs
-     SET title=?, guide_md=?, allowed_extensions=?, max_file_size_mb=?, max_files=?, updated_at=datetime('now', 'localtime')
+     SET title=?, guide_md=?, guide_url=?, allowed_extensions=?, max_file_size_mb=?, max_files=?, updated_at=datetime('now', 'localtime')
      WHERE id=?`,
-    [title, guideMd, allowedExtensions, maxFileSizeMb, maxFiles, configId]
+    [title, guideMd, guideUrl, allowedExtensions, maxFileSizeMb, maxFiles, configId]
   );
   res.json({ ok: true, id: configId });
 });
@@ -304,7 +324,7 @@ router.post('/guide-md', upload.single('file'), async (req: Request, res: Respon
     fs.unlinkSync(req.file.path);
     const configId = await ensureConfig(s);
     await assignmentExecute(
-      `UPDATE assignment_configs SET guide_md=?, updated_at=datetime('now', 'localtime') WHERE id=?`,
+      `UPDATE assignment_configs SET guide_md=?, guide_url='', updated_at=datetime('now', 'localtime') WHERE id=?`,
       [guideMd, configId]
     );
     res.json({ guide_md: guideMd });
@@ -330,11 +350,43 @@ router.post('/resources', upload.array('files', 20), async (req: Request, res: R
   res.json({ uploaded: files.length });
 });
 
+router.post('/resource-links', async (req: Request, res: Response) => {
+  const s = scope(req);
+  if (!assertScope(s, res)) return;
+  const sourceUrl = String(req.body?.url || '').trim();
+  if (!sourceUrl) return res.status(400).json({ error: 'GitHub 링크를 입력하세요.' });
+  try {
+    githubFetchUrl(sourceUrl);
+    const remote = await fetchGithubSource(sourceUrl);
+    const filename = String(req.body?.title || '').trim() || remoteFilename(sourceUrl);
+    const configId = await ensureConfig(s);
+    const inserted = await assignmentExecute(
+      `INSERT INTO assignment_resources(config_id, filename, filepath, mime_type, size, source_url)
+       VALUES(?,?, '', ?, ?, ?)`,
+      [configId, filename, remote.contentType, remote.buffer.length, sourceUrl]
+    );
+    res.json({ id: Number(inserted.lastInsertRowid), filename, source_url: sourceUrl });
+  } catch (error) {
+    res.status(400).json({ error: error instanceof Error ? error.message : String(error) });
+  }
+});
+
 router.get('/resources/:id/file', async (req: Request, res: Response) => {
-  const resource = await assignmentQueryOne<{ filename: string; filepath: string; mime_type: string }>(
-    'SELECT filename, filepath, mime_type FROM assignment_resources WHERE id=?',
+  const resource = await assignmentQueryOne<{ filename: string; filepath: string; mime_type: string; source_url: string }>(
+    'SELECT filename, filepath, mime_type, source_url FROM assignment_resources WHERE id=?',
     [req.params.id]
   );
+  if (resource?.source_url) {
+    try {
+      const remote = await fetchGithubSource(resource.source_url);
+      res.setHeader('Cache-Control', 'no-store, max-age=0');
+      res.setHeader('Content-Type', previewContentType(resource.filename, remote.contentType));
+      res.setHeader('Content-Disposition', `inline; filename*=UTF-8''${encodeURIComponent(resource.filename)}`);
+      return res.send(remote.buffer);
+    } catch (error) {
+      return res.status(502).json({ error: error instanceof Error ? error.message : String(error) });
+    }
+  }
   const filepath = resource ? resolveStoredPath(resource.filepath) : '';
   if (!resource || !fs.existsSync(filepath)) return res.status(404).json({ error: '파일을 찾을 수 없습니다.' });
   res.setHeader('Content-Type', previewContentType(resource.filename, resource.mime_type));

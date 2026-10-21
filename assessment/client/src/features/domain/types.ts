@@ -16,6 +16,7 @@ export interface AssignmentResource {
   mime_type: string;
   size: number;
   uploaded_at: string;
+  source_url: string;
 }
 
 export interface AssignmentClassSnapshot {
@@ -34,6 +35,9 @@ export interface AssignmentConfig {
   domain_name: string;
   title: string;
   guide_md: string;
+  guide_url: string;
+  resolved_guide_md?: string;
+  guide_fetch_error?: string;
   allowed_extensions: string;
   max_file_size_mb: number;
   max_files: number;

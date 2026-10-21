@@ -9,7 +9,8 @@ import { execFileSync } from 'child_process';
 import MarkdownIt from 'markdown-it';
 import { execute, initDb, queryAll, queryOne, transaction } from './db';
 import { decodeUploadFilename, studentDownloadFilename } from './filename';
-import { LOGS_DIR, moveFileToTrash, resolveStoredPath, restoreTrashedFile, SUBMISSIONS_DIR, TEMP_DIR, toStoredPath } from './storage';
+import { fetchGithub, fetchGithubText } from './githubSource';
+import { LOGS_DIR, moveFileToTrash, resolveStoredPath, restoreTrashedFile, RUN_RESOURCES_DIR, SUBMISSIONS_DIR, TEMP_DIR, toStoredPath } from './storage';
 
 const app = express();
 const teacherApp = express();
@@ -294,9 +295,94 @@ function markdown(md: string) {
   return mdRenderer.render(String(md || ''));
 }
 
+function inlineContentType(filename: string, mimeType = '') {
+  if (mimeType && mimeType !== 'application/octet-stream') return mimeType;
+  const types: Record<string, string> = {
+    '.pdf': 'application/pdf',
+    '.txt': 'text/plain; charset=utf-8',
+    '.csv': 'text/csv; charset=utf-8',
+    '.json': 'application/json; charset=utf-8',
+    '.html': 'text/html; charset=utf-8',
+    '.png': 'image/png',
+    '.jpg': 'image/jpeg',
+    '.jpeg': 'image/jpeg',
+    '.gif': 'image/gif',
+    '.webp': 'image/webp',
+  };
+  return types[path.extname(filename).toLowerCase()] || mimeType || 'application/octet-stream';
+}
+
+type PreparedRunResource = {
+  filename: string;
+  filepath: string;
+  mimeType: string;
+  size: number;
+  sourceUrl: string;
+};
+
+async function prepareRunSnapshot(configId: number) {
+  const config = await queryOne<any>('SELECT guide_md, guide_url FROM assignment_configs WHERE id=?', [configId]);
+  if (!config) throw new Error('평가 실시 설정을 찾을 수 없습니다.');
+
+  let guideMd = String(config.guide_md || '');
+  if (config.guide_url) {
+    try {
+      guideMd = await fetchGithubText(String(config.guide_url));
+    } catch (error) {
+      throw new Error(`GitHub 안내문 최신본을 가져오지 못해 평가를 시작하지 않았습니다. ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  const resources = await queryAll<any>(
+    'SELECT filename, filepath, mime_type, size, source_url FROM assignment_resources WHERE config_id=? ORDER BY uploaded_at, id',
+    [configId]
+  );
+  const snapshotDir = path.join(RUN_RESOURCES_DIR, `${Date.now()}_${crypto.randomBytes(6).toString('hex')}`);
+  const prepared: PreparedRunResource[] = [];
+  if (resources.length) fs.mkdirSync(snapshotDir, { recursive: true });
+
+  try {
+    for (const [index, resource] of resources.entries()) {
+      const filename = String(resource.filename || `자료_${index + 1}`);
+      const target = path.join(snapshotDir, `${index + 1}_${safeSegment(filename)}`);
+      let mimeType = String(resource.mime_type || 'application/octet-stream');
+      let size = 0;
+      if (resource.source_url) {
+        let remote;
+        try {
+          remote = await fetchGithub(String(resource.source_url));
+        } catch (error) {
+          throw new Error(`${filename} 최신본을 가져오지 못했습니다. ${error instanceof Error ? error.message : String(error)}`);
+        }
+        fs.writeFileSync(target, remote.buffer);
+        mimeType = remote.contentType || mimeType;
+        size = remote.buffer.length;
+      } else {
+        const source = resolveStoredPath(String(resource.filepath || ''));
+        if (!source || !fs.existsSync(source)) throw new Error(`${filename} 파일을 찾을 수 없습니다.`);
+        fs.copyFileSync(source, target);
+        size = fs.statSync(target).size;
+      }
+      prepared.push({
+        filename,
+        filepath: toStoredPath(target),
+        mimeType,
+        size,
+        sourceUrl: String(resource.source_url || ''),
+      });
+    }
+    return { guideMd, resources: prepared, snapshotDir: resources.length ? snapshotDir : '' };
+  } catch (error) {
+    try { if (fs.existsSync(snapshotDir)) fs.rmSync(snapshotDir, { recursive: true, force: true }); } catch {}
+    throw error;
+  }
+}
+
 async function currentOpenRun() {
   return queryOne<any>(
-    `SELECT run.*, cfg.*, ac.id AS ac_id, ac.room
+    `SELECT cfg.*, run.id AS id, run.config_id, run.assignment_class_id, run.share_code,
+            run.viewer_code, run.is_open, run.started_at, run.ended_at, run.guide_md_snapshot,
+            ac.id AS ac_id, ac.room
      FROM assignment_runs run
      JOIN assignment_configs cfg ON cfg.id=run.config_id
      JOIN assignment_classes ac ON ac.id=run.assignment_class_id
@@ -308,7 +394,9 @@ async function currentOpenRun() {
 
 async function runByShareCode(shareCode: string) {
   return queryOne<any>(
-    `SELECT run.*, cfg.*, ac.id AS ac_id, ac.room
+    `SELECT cfg.*, run.id AS id, run.config_id, run.assignment_class_id, run.share_code,
+            run.viewer_code, run.is_open, run.started_at, run.ended_at, run.guide_md_snapshot,
+            ac.id AS ac_id, ac.room
      FROM assignment_runs run
      JOIN assignment_configs cfg ON cfg.id=run.config_id
      JOIN assignment_classes ac ON ac.id=run.assignment_class_id
@@ -318,16 +406,24 @@ async function runByShareCode(shareCode: string) {
 }
 
 async function renderStudentPage(run: any, submitPath: string, res: any) {
-  const resources = await queryAll<any>('SELECT id, filename, size FROM assignment_resources WHERE config_id=? ORDER BY uploaded_at DESC', [run.config_id]);
+  const resources = await queryAll<any>('SELECT id, filename, filepath, mime_type, size FROM assignment_run_resources WHERE run_id=? ORDER BY id', [run.id]);
+  const markdownResources = resources.filter(resource => ['.md', '.markdown'].includes(path.extname(String(resource.filename)).toLowerCase()));
+  const otherResources = resources.filter(resource => !markdownResources.includes(resource));
+  const markdownDocuments = markdownResources.map(resource => {
+    const filepath = resolveStoredPath(String(resource.filepath || ''));
+    const content = filepath && fs.existsSync(filepath) ? fs.readFileSync(filepath, 'utf8') : '자료를 찾을 수 없습니다.';
+    return `<section class="card"><h2>${escapeHtml(resource.filename)}</h2><div class="guide">${markdown(content)}</div></section>`;
+  }).join('');
   const rules = submissionRules(run.allowed_extensions, Number(run.max_file_size_mb || 50), Number(run.max_files || 1));
   const uploadRules = rules.length ? rules : [{ extension: '', max_file_size_mb: Number(run.max_file_size_mb || 50), max_files: Number(run.max_files || 1) }];
   res.send(page(run.title || '수행평가 제출', `
 <header><strong>${escapeHtml(run.title || '수행평가 제출')}</strong><span class="${run.is_open ? 'ok' : 'danger'}">${run.is_open ? '제출 가능' : '제출 마감'}</span></header>
 <main class="grid student-layout">
  <section class="card student-info"><h2>학생 정보</h2><div class="student-fields"><div><label>학년</label><input value="${Number(run.grade)}" readonly></div><div><label>반</label><input form="f" name="classNum" type="number" min="1" step="1" required inputmode="numeric"></div><div><label>번호</label><input form="f" name="seatNum" type="number" min="1" step="1" required inputmode="numeric"></div><div><label>이름</label><input form="f" name="name" required autocomplete="name" placeholder="띄어쓰기 없이 입력"></div></div></section>
- <section class="card"><h2>안내</h2><div class="guide">${markdown(run.guide_md)}</div></section>
+ <section class="card"><h2>안내</h2><div class="guide">${markdown(run.guide_md_snapshot)}</div></section>
  <div class="stack">
-  <section class="card"><h2>다운로드 자료</h2><div class="resource-list">${resources.map(r=>`<a class="resource-card" href="/api/public/resources/${r.id}/file" onclick="downloadResource(event,${r.id})"><span class="resource-name">${escapeHtml(r.filename)}</span><span class="resource-action">다운로드</span></a>`).join('') || '<p class="muted">자료 없음</p>'}</div></section>
+  ${markdownDocuments}
+  <section class="card"><h2>배부 자료</h2><div class="resource-list">${otherResources.map(r=>`<a class="resource-card" href="/api/public/run-resources/${r.id}/file" target="_blank" rel="noopener"><span class="resource-name">${escapeHtml(r.filename)}</span><span class="resource-action">열기</span></a>`).join('') || (markdownResources.length ? '<p class="muted">위 자료가 평가 실시 시점의 저장본입니다.</p>' : '<p class="muted">자료 없음</p>')}</div></section>
   <section class="card"><h2>제출</h2><form id="f" class="student-form"><div id="fileSection"><label>파일</label><div id="uploadGroups" class="file-list"></div></div><label class="no-file-option"><input id="noFile" name="noFile" type="checkbox" value="1"><span>파일 미제출</span></label><button>제출</button></form><p id="msg"></p></section>
  </div>
 </main>
@@ -344,7 +440,6 @@ function renderFiles(){uploadGroups.innerHTML=rules.map((rule,groupIndex)=>{
 }).join('');}
 function addFiles(groupIndex,input){const rule=rules[groupIndex];for(const file of input.files||[]){if(selectedFiles[groupIndex].length<rule.max_files)selectedFiles[groupIndex].push(file);}input.value='';renderFiles();}
 function removeFile(groupIndex,fileIndex){selectedFiles[groupIndex].splice(fileIndex,1);renderFiles();}
-function downloadResource(event,id){event.preventDefault();if(!f.reportValidity())return;const query=new URLSearchParams({classNum:f.elements.classNum.value,seatNum:f.elements.seatNum.value,name:f.elements.name.value});location.href='/api/public/resources/'+id+'/file?'+query;}
 noFile.onchange=()=>{fileSection.classList.toggle('uploads-disabled',noFile.checked);};
 f.onsubmit=async(e)=>{e.preventDefault();const allFiles=selectedFiles.flat();if(!noFile.checked&&allFiles.length===0){msg.textContent='파일을 추가하거나 파일 미제출을 체크하세요.';msg.className='danger';return;}msg.textContent='제출 중...';const fd=new FormData(f);fd.delete('files');if(!noFile.checked)allFiles.forEach(file=>fd.append('files',file));const r=await fetch('${submitPath}',{method:'POST',body:fd});const data=await r.json().catch(()=>({error:'제출 실패'}));msg.textContent=r.ok?data.message:data.error;msg.className=r.ok?'ok':'danger';if(r.ok){f.reset();selectedFiles=rules.map(()=>[]);fileSection.classList.remove('uploads-disabled');renderFiles();}};
 renderFiles();
@@ -786,6 +881,13 @@ app.post('/api/admin/runs', requireLocal, async (req, res) => {
     });
   }
 
+  let snapshot;
+  try {
+    snapshot = await prepareRunSnapshot(configId);
+  } catch (error) {
+    return res.status(502).json({ error: error instanceof Error ? error.message : String(error) });
+  }
+
   const movedFiles: Array<{ trashPath: string; originalFilepath: string }> = [];
   try {
     for (const file of existing.files) {
@@ -813,8 +915,18 @@ app.post('/api/admin/runs', requireLocal, async (req, res) => {
       }
       await execute('UPDATE assignment_runs SET is_open=0, ended_at=datetime(\'now\', \'localtime\') WHERE is_open=1');
       await execute('UPDATE assignment_configs SET is_open=0');
-      const r = await execute('INSERT INTO assignment_runs(config_id, assignment_class_id, share_code, viewer_code, is_open) VALUES(?,?,?,?,1)', [configId, assignmentClassId, share, viewer]);
+      const r = await execute(
+        'INSERT INTO assignment_runs(config_id, assignment_class_id, share_code, viewer_code, is_open, guide_md_snapshot) VALUES(?,?,?,?,1,?)',
+        [configId, assignmentClassId, share, viewer, snapshot.guideMd]
+      );
       runId = Number(r.lastInsertRowid);
+      for (const resource of snapshot.resources) {
+        await execute(
+          `INSERT INTO assignment_run_resources(run_id, filename, filepath, mime_type, size, source_url)
+           VALUES(?,?,?,?,?,?)`,
+          [runId, resource.filename, resource.filepath, resource.mimeType, resource.size, resource.sourceUrl]
+        );
+      }
       for (const [index, student] of students.entries()) {
         await execute(
           `INSERT INTO assignment_run_students(
@@ -845,12 +957,32 @@ app.post('/api/admin/runs', requireLocal, async (req, res) => {
     }
     return res.json({ id: runId, share_code: share, viewer_code: viewer, target_student_count: students.length });
   } catch (error) {
+    try { if (snapshot.snapshotDir && fs.existsSync(snapshot.snapshotDir)) fs.rmSync(snapshot.snapshotDir, { recursive: true, force: true }); } catch {}
     for (const moved of movedFiles.reverse()) {
       try { restoreTrashedFile(moved.trashPath, moved.originalFilepath); } catch {}
     }
     return res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
   }
 });
+
+async function sendRunResource(req: any, res: any) {
+  const resource = await queryOne<any>(
+    `SELECT resource.filename, resource.filepath, resource.mime_type
+     FROM assignment_run_resources resource
+     JOIN assignment_runs run ON run.id=resource.run_id
+     WHERE resource.id=?`,
+    [req.params.id]
+  );
+  const filepath = resource ? resolveStoredPath(String(resource.filepath || '')) : '';
+  if (!resource || !filepath || !fs.existsSync(filepath)) return res.status(404).send('자료를 찾을 수 없습니다.');
+  res.setHeader('Cache-Control', 'private, no-store');
+  res.setHeader('Content-Type', inlineContentType(resource.filename, resource.mime_type));
+  res.setHeader('Content-Disposition', `inline; filename*=UTF-8''${encodeURIComponent(resource.filename)}`);
+  res.sendFile(path.resolve(filepath));
+}
+
+app.get('/api/public/run-resources/:id/file', sendRunResource);
+studentApp.get('/api/public/run-resources/:id/file', sendRunResource);
 
 app.post('/api/admin/runs/:id/end', requireLocal, async (req, res) => {
   const run = await queryOne<any>(

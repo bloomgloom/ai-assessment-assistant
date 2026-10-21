@@ -237,6 +237,7 @@ export const assignmentConfigsApi = {
     domainName: string;
     title: string;
     guide_md: string;
+    guide_url: string;
     allowed_extensions: string;
     max_file_size_mb: number;
     max_files: number;
@@ -253,6 +254,8 @@ export const assignmentConfigsApi = {
     Array.from(files).forEach((file) => form.append('files', file));
     return api.post('/assignment-configs/resources', form);
   },
+  addResourceLink: (data: { year: number; semester: number; grade: number; subject: string; domainName: string; url: string; title?: string }) =>
+    api.post('/assignment-configs/resource-links', data),
   deleteResource: (id: number) => api.delete(`/assignment-configs/resources/${id}`),
   resourceFileUrl: (id: number) => `/api/assignment-configs/resources/${id}/file`,
   getHistory: (params: { year: number; semester: number; grade: number; subject: string; domainName: string }) =>

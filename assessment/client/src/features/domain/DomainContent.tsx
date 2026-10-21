@@ -1,6 +1,6 @@
 import { Dispatch, DragEvent, lazy, ReactNode, RefObject, SetStateAction, Suspense, useEffect, useState } from 'react';
 import MarkdownIt from 'markdown-it';
-import { AlertCircle, ClipboardCheck, Download, Edit3, Eye, FileText, Loader2, Plus, Save, Trash2, Upload, X } from 'lucide-react';
+import { AlertCircle, ClipboardCheck, Download, Edit3, ExternalLink, Eye, FileText, Link2, Loader2, Plus, Save, Trash2, Upload, X } from 'lucide-react';
 import { AiGenerateBox } from '../../components/common/AiGenerateBox';
 import { CriteriaItemCard } from '../../components/common/CriteriaItemCard';
 import { StableTextarea } from '../../components/common/StableTextarea';
@@ -98,6 +98,7 @@ interface DomainContentProps {
   saveAssignmentConfig: () => Promise<boolean>;
   handleAssignmentGuideUpload: (e: React.ChangeEvent<HTMLInputElement>) => void;
   handleAssignmentResourceUpload: (e: React.ChangeEvent<HTMLInputElement>) => void;
+  addAssignmentResourceLink: (url: string, title?: string) => Promise<boolean>;
   deleteAssignmentResource: (id: number) => void;
 }
 
@@ -312,12 +313,14 @@ export function DomainContent({
   saveAssignmentConfig,
   handleAssignmentGuideUpload,
   handleAssignmentResourceUpload,
+  addAssignmentResourceLink,
   deleteAssignmentResource,
 }: DomainContentProps) {
   const [guideEditorOpen, setGuideEditorOpen] = useState(false);
   const [guideOriginal, setGuideOriginal] = useState('');
   const [extensionDraft, setExtensionDraft] = useState('');
   const [viewingResource, setViewingResource] = useState<AssignmentResource | null>(null);
+  const [resourceLinkDraft, setResourceLinkDraft] = useState('');
   const [assignmentHistory, setAssignmentHistory] = useState<AssignmentRunSummary[]>([]);
   const [assignmentHistoryLoading, setAssignmentHistoryLoading] = useState(false);
   const [selectedRunSummary, setSelectedRunSummary] = useState<AssignmentRunSummary | null>(null);
@@ -909,7 +912,7 @@ export function DomainContent({
                     className="btn-secondary py-1 text-xs"
                     onClick={() => saveBlob(
                       `${assignmentConfig?.title || `${selectedSubject.subject} ${selectedDomain}`} 안내.md`,
-                      new Blob([assignmentConfig?.guide_md || ''], { type: 'text/markdown;charset=utf-8' }),
+                      new Blob([assignmentConfig?.resolved_guide_md ?? assignmentConfig?.guide_md ?? ''], { type: 'text/markdown;charset=utf-8' }),
                     ).catch((error) => alert(error.message))}
                     disabled={assignmentLoading}
                   >
@@ -932,6 +935,29 @@ export function DomainContent({
                   />
                 </div>
               </div>
+              <div className="mb-3 flex gap-2">
+                <input
+                  className="input h-9 flex-1 text-xs"
+                  type="url"
+                  value={assignmentConfig?.guide_url || ''}
+                  onChange={(event) => updateAssignmentConfig({ guide_url: event.target.value })}
+                    placeholder="공개 GitHub Markdown 링크 (blob 또는 raw)"
+                />
+                <button
+                  type="button"
+                  className="btn-secondary py-1 text-xs"
+                  disabled={assignmentLoading || assignmentUploading}
+                  onClick={() => saveAssignmentConfig().catch((error) => alert(error.message))}
+                >
+                  <Link2 size={13} />
+                  최신본 연결
+                </button>
+              </div>
+              {assignmentConfig?.guide_fetch_error && (
+                <div className="mb-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
+                  최신 안내문을 불러오지 못했습니다: {assignmentConfig.guide_fetch_error}
+                </div>
+              )}
               {assignmentLoading ? (
                 <div className="flex h-[42rem] items-center justify-center rounded-md border border-gray-200 bg-gray-50 text-gray-400">
                   <Loader2 size={20} className="animate-spin" />
@@ -939,7 +965,7 @@ export function DomainContent({
               ) : (
                 <div
                   className="prose-preview h-[42rem] overflow-auto rounded-md border border-gray-200 bg-gray-50 p-5 text-sm leading-relaxed text-gray-800"
-                  dangerouslySetInnerHTML={{ __html: renderMarkdown(assignmentConfig?.guide_md || '안내 사항을 입력하세요.') }}
+                  dangerouslySetInnerHTML={{ __html: renderMarkdown(assignmentConfig?.resolved_guide_md ?? assignmentConfig?.guide_md ?? '안내 사항을 입력하세요.') }}
                 />
               )}
             </div>
@@ -949,7 +975,7 @@ export function DomainContent({
                 <div className="mb-3 flex items-center justify-between gap-2">
                   <div>
                     <h3 className="text-sm font-semibold text-gray-800">배부 자료</h3>
-                    <p className="mt-0.5 text-xs text-gray-500">학생이 다운로드할 파일입니다.</p>
+                    <p className="mt-0.5 text-xs text-gray-500">파일을 올리거나 GitHub 최신본을 연결할 수 있습니다.</p>
                   </div>
                   <button
                     className="btn-secondary py-1 text-xs"
@@ -974,12 +1000,37 @@ export function DomainContent({
                     onChange={handleAssignmentResourceUpload}
                   />
                 </div>
+                <div className="mb-3 flex gap-2">
+                  <input
+                    className="input h-9 flex-1 text-xs"
+                    type="url"
+                    value={resourceLinkDraft}
+                    onChange={(event) => setResourceLinkDraft(event.target.value)}
+                    placeholder="공개 GitHub 파일 링크 (blob 또는 raw)"
+                    onKeyDown={async (event) => {
+                      if (event.key !== 'Enter' || !resourceLinkDraft.trim()) return;
+                      event.preventDefault();
+                      if (await addAssignmentResourceLink(resourceLinkDraft.trim())) setResourceLinkDraft('');
+                    }}
+                  />
+                  <button
+                    type="button"
+                    className="btn-secondary py-1 text-xs"
+                    disabled={!resourceLinkDraft.trim() || assignmentUploading}
+                    onClick={async () => {
+                      if (await addAssignmentResourceLink(resourceLinkDraft.trim())) setResourceLinkDraft('');
+                    }}
+                  >
+                    <Link2 size={13} />
+                    링크 추가
+                  </button>
+                </div>
                 <div className="space-y-2">
                   {assignmentResources.map((resource) => (
                     <div key={resource.id} className="rounded-md border border-gray-200 bg-gray-50 p-2">
                       <div className="truncate text-xs font-medium text-gray-800" title={resource.filename}>{resource.filename}</div>
                       <div className="mt-1 flex items-center justify-between gap-2 text-[11px] text-gray-500">
-                        <span>{formatBytes(Number(resource.size))}</span>
+                        <span>{resource.source_url ? 'GitHub 최신본' : formatBytes(Number(resource.size))}</span>
                         <div className="flex gap-1">
                           <button
                             className="inline-flex h-7 w-7 items-center justify-center rounded border border-gray-200 bg-white text-gray-600 hover:bg-gray-50"
@@ -988,17 +1039,28 @@ export function DomainContent({
                           >
                             <Eye size={13} />
                           </button>
-                          <button
-                            type="button"
-                            className="inline-flex h-7 w-7 items-center justify-center rounded border border-gray-200 bg-white text-gray-600 hover:bg-gray-50"
-                            onClick={() => downloadUrl(
-                              assignmentConfigsApi.resourceFileUrl(resource.id),
-                              resource.filename,
-                            ).catch((error) => alert(error.message))}
-                            title="다운로드"
-                          >
-                            <Download size={13} />
-                          </button>
+                          {resource.source_url ? (
+                            <button
+                              type="button"
+                              className="inline-flex h-7 w-7 items-center justify-center rounded border border-gray-200 bg-white text-gray-600 hover:bg-gray-50"
+                              onClick={() => window.open(resource.source_url, '_blank', 'noopener,noreferrer')}
+                              title="GitHub 원본 열기"
+                            >
+                              <ExternalLink size={13} />
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              className="inline-flex h-7 w-7 items-center justify-center rounded border border-gray-200 bg-white text-gray-600 hover:bg-gray-50"
+                              onClick={() => downloadUrl(
+                                assignmentConfigsApi.resourceFileUrl(resource.id),
+                                resource.filename,
+                              ).catch((error) => alert(error.message))}
+                              title="다운로드"
+                            >
+                              <Download size={13} />
+                            </button>
+                          )}
                           <button
                             className="inline-flex h-7 w-7 items-center justify-center rounded border border-red-200 bg-white text-red-500 hover:bg-red-50"
                             onClick={() => deleteAssignmentResource(resource.id)}
@@ -1304,7 +1366,7 @@ export function DomainContent({
                     <StableTextarea
                       className="textarea h-full w-full font-mono text-xs leading-relaxed"
                       value={assignmentConfig?.guide_md || ''}
-                      onChange={(e) => updateAssignmentConfig({ guide_md: e.target.value })}
+                      onChange={(e) => updateAssignmentConfig({ guide_md: e.target.value, guide_url: '', resolved_guide_md: e.target.value, guide_fetch_error: '' })}
                       placeholder={'# 수행평가 안내\n\n| 항목 | 내용 |\n| --- | --- |\n| 제출물 | 보고서 |\n| 형식 | PDF |\n'}
                     />
                   </div>

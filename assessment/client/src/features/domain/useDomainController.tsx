@@ -170,8 +170,8 @@ export function useDomainController() {
 
   useEffect(() => { loadSubjects(); }, [loadSubjects]);
 
-  const loadAssignment = useCallback(async (sub: SubjectItem, domainName: string) => {
-    setAssignmentLoading(true);
+  const loadAssignment = useCallback(async (sub: SubjectItem, domainName: string, silent = false) => {
+    if (!silent) setAssignmentLoading(true);
     try {
       const r = await assignmentConfigsApi.getConfig({
         year: sub.year,
@@ -188,9 +188,18 @@ export function useDomainController() {
       setAssignmentResources([]);
       setAssignmentClasses([]);
     } finally {
-      setAssignmentLoading(false);
+      if (!silent) setAssignmentLoading(false);
     }
   }, []);
+
+  useEffect(() => {
+    if (activeTab !== 'assignment' || !selectedSubject || !selectedDomain || isDirty) return;
+    void loadAssignment(selectedSubject, selectedDomain);
+    const refresh = window.setInterval(() => {
+      void loadAssignment(selectedSubject, selectedDomain, true);
+    }, 30_000);
+    return () => window.clearInterval(refresh);
+  }, [activeTab, selectedSubject, selectedDomain, isDirty, loadAssignment]);
 
   const loadSubjectComments = useCallback(async (sub: SubjectItem) => {
     try {
@@ -450,6 +459,7 @@ export function useDomainController() {
           domainName: selectedDomain,
           title: assignmentConfig.title || `${selectedSubject.subject} ${selectedDomain}`,
           guide_md: assignmentConfig.guide_md || '',
+          guide_url: assignmentConfig.guide_url || '',
           allowed_extensions: assignmentConfig.allowed_extensions || '',
           max_file_size_mb: Number(assignmentConfig.max_file_size_mb) || 50,
           max_files: Number(assignmentConfig.max_files) || 1,
@@ -501,10 +511,12 @@ export function useDomainController() {
       domainName: selectedDomain,
       title: `${selectedSubject.subject} ${selectedDomain}`,
       guide_md: assignmentConfig.guide_md || '',
+      guide_url: assignmentConfig.guide_url || '',
       allowed_extensions: assignmentConfig.allowed_extensions || '',
       max_file_size_mb: Number(assignmentConfig.max_file_size_mb) || 50,
       max_files: Number(assignmentConfig.max_files) || 1,
     });
+    await loadAssignment(selectedSubject, selectedDomain);
     setIsDirty(false);
     return true;
   };
@@ -520,7 +532,7 @@ export function useDomainController() {
         subject: selectedSubject.subject,
         domainName: selectedDomain,
       }, e.target.files[0]);
-      setAssignmentConfig(prev => prev ? { ...prev, guide_md: r.data.guide_md || '' } : prev);
+      setAssignmentConfig(prev => prev ? { ...prev, guide_md: r.data.guide_md || '', guide_url: '', resolved_guide_md: r.data.guide_md || '', guide_fetch_error: '' } : prev);
       setIsDirty(true);
     } catch (err: any) {
       alert(`Markdown 업로드 실패: ${err?.response?.data?.error || err.message || String(err)}`);
@@ -548,6 +560,30 @@ export function useDomainController() {
     } finally {
       setAssignmentUploading(false);
       e.target.value = '';
+    }
+  };
+
+  const addAssignmentResourceLink = async (url: string, title = '') => {
+    if (!selectedSubject || !selectedDomain) return false;
+    setAssignmentUploading(true);
+    try {
+      await saveAssignmentConfig();
+      await assignmentConfigsApi.addResourceLink({
+        year: selectedSubject.year,
+        semester: selectedSubject.semester,
+        grade: selectedSubject.grade,
+        subject: selectedSubject.subject,
+        domainName: selectedDomain,
+        url,
+        title,
+      });
+      await loadAssignment(selectedSubject, selectedDomain);
+      return true;
+    } catch (err: any) {
+      alert(`GitHub 자료 연결 실패: ${err?.response?.data?.error || err.message || String(err)}`);
+      return false;
+    } finally {
+      setAssignmentUploading(false);
     }
   };
 
@@ -1482,6 +1518,7 @@ export function useDomainController() {
     saveAssignmentConfig,
     handleAssignmentGuideUpload,
     handleAssignmentResourceUpload,
+    addAssignmentResourceLink,
     deleteAssignmentResource,
   };
 }
