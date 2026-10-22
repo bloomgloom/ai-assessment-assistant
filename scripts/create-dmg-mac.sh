@@ -13,7 +13,7 @@ DMG_PATH="release/${PRODUCT_NAME}-${VERSION}-${ARCH}.dmg"
 
 if [ ! -d "$APP_PATH" ]; then
   echo "Error: .app not found at $APP_PATH"
-  echo "Run './scripts/build-app-mac.sh' first"
+  echo "Run 'npm run build:mac:app' first"
   exit 1
 fi
 

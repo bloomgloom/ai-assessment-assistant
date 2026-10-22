@@ -53,14 +53,48 @@ Windows에서 SmartScreen 경고가 나오면 배포자를 확인한 뒤 `추가
 
 ## 개발자용
 
+Node.js와 Python 3.11~3.13이 필요합니다. 처음 내려받은 저장소에서는 플랫폼별 최초 준비를 한 번 실행합니다.
+
+### macOS
+
+최초 준비:
+
 ```bash
-./scripts/build-app-mac.sh
-./scripts/create-dmg-mac.sh
+npm install --no-audit --no-fund
+npm install --prefix assessment --no-audit --no-fund
+npm install --prefix assignment --no-audit --no-fund
+npm run python:setup
 ```
+
+일반 앱 빌드:
+
+```bash
+npm run build:mac:app
+```
+
+결과물은 `release/mac-arm64/AI Assessment Assistant.app`에 생성됩니다. Intel Mac에서는 `release/mac-x64`에 생성됩니다.
+
+DMG까지 만들려면 `create-dmg`가 설치된 환경에서 앱 빌드 후 다음 명령을 실행합니다.
+
+```bash
+npm run build:mac:dmg
+```
+
+### Windows
+
+최초 준비와 앱 빌드를 한 번에 실행:
 
 ```powershell
 .\scripts\build-windows.ps1
 ```
+
+의존성과 Python 환경이 이미 준비된 이후의 일반 빌드:
+
+```powershell
+npm run build:windows
+```
+
+Windows 결과물은 `release` 폴더에 생성됩니다.
 
 ## TODO
 
