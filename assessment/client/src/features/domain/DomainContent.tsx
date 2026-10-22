@@ -1,6 +1,6 @@
 import { Dispatch, DragEvent, lazy, ReactNode, RefObject, SetStateAction, Suspense, useEffect, useState } from 'react';
 import MarkdownIt from 'markdown-it';
-import { AlertCircle, ClipboardCheck, Download, Edit3, ExternalLink, Eye, FileText, Link2, Loader2, Plus, Save, Trash2, Upload, X } from 'lucide-react';
+import { AlertCircle, ClipboardCheck, Download, Edit3, ExternalLink, Eye, FileText, Link2, Loader2, Plus, RefreshCw, Save, Trash2, Upload, X } from 'lucide-react';
 import { AiGenerateBox } from '../../components/common/AiGenerateBox';
 import { CriteriaItemCard } from '../../components/common/CriteriaItemCard';
 import { StableTextarea } from '../../components/common/StableTextarea';
@@ -95,7 +95,7 @@ interface DomainContentProps {
   assignmentLoading: boolean;
   assignmentUploading: boolean;
   updateAssignmentConfig: (patch: Partial<AssignmentConfig>) => void;
-  saveAssignmentConfig: () => Promise<boolean>;
+  saveAssignmentConfig: (overrides?: Partial<AssignmentConfig>) => Promise<boolean>;
   handleAssignmentGuideUpload: (e: React.ChangeEvent<HTMLInputElement>) => void;
   handleAssignmentResourceUpload: (e: React.ChangeEvent<HTMLInputElement>) => void;
   addAssignmentResourceLink: (url: string, title?: string) => Promise<boolean>;
@@ -321,6 +321,7 @@ export function DomainContent({
   const [extensionDraft, setExtensionDraft] = useState('');
   const [viewingResource, setViewingResource] = useState<AssignmentResource | null>(null);
   const [resourceLinkDraft, setResourceLinkDraft] = useState('');
+  const [guideLinkDraft, setGuideLinkDraft] = useState('');
   const [assignmentHistory, setAssignmentHistory] = useState<AssignmentRunSummary[]>([]);
   const [assignmentHistoryLoading, setAssignmentHistoryLoading] = useState(false);
   const [selectedRunSummary, setSelectedRunSummary] = useState<AssignmentRunSummary | null>(null);
@@ -328,6 +329,17 @@ export function DomainContent({
   const [runDetailLoading, setRunDetailLoading] = useState(false);
   const [draggedItem, setDraggedItem] = useState<{ kind: 'scoring' | 'records'; index: number } | null>(null);
   const [dragOverItem, setDragOverItem] = useState<{ kind: 'scoring' | 'records'; index: number } | null>(null);
+
+  useEffect(() => {
+    setGuideLinkDraft(assignmentConfig?.guide_url || '');
+  }, [assignmentConfig?.id, assignmentConfig?.guide_url]);
+
+  useEffect(() => {
+    setResourceLinkDraft(current => {
+      if (assignmentResources.some(resource => resource.source_url === current)) return current;
+      return assignmentResources.find(resource => resource.source_url)?.source_url || '';
+    });
+  }, [assignmentConfig?.id, assignmentResources]);
 
   useEffect(() => {
     if (activeTab !== 'assignment' || !selectedSubject || !selectedDomain) {
@@ -893,7 +905,7 @@ export function DomainContent({
                 </div>
                 <div className="flex shrink-0 gap-2">
                   <button
-                    className="btn-secondary py-1 text-xs"
+                    className="btn-secondary h-9 py-0 text-xs"
                     onClick={async () => {
                       if (hasDesktopFileDialogs()) {
                         const files = await openFiles({ filters: [{ name: 'Markdown', extensions: ['md', 'markdown', 'txt'] }] });
@@ -909,7 +921,7 @@ export function DomainContent({
                   </button>
                   <button
                     type="button"
-                    className="btn-secondary py-1 text-xs"
+                    className="btn-secondary h-9 py-0 text-xs"
                     onClick={() => saveBlob(
                       `${assignmentConfig?.title || `${selectedSubject.subject} ${selectedDomain}`} 안내.md`,
                       new Blob([assignmentConfig?.resolved_guide_md ?? assignmentConfig?.guide_md ?? ''], { type: 'text/markdown;charset=utf-8' }),
@@ -920,11 +932,24 @@ export function DomainContent({
                     MD 다운로드
                   </button>
                   <button
-                    className="btn-secondary py-1 text-xs"
+                    className="btn-secondary h-9 py-0 text-xs"
                     onClick={() => { setGuideOriginal(assignmentConfig?.guide_md || ''); setGuideEditorOpen(true); }}
                   >
                     <Edit3 size={13} />
                     직접 작성
+                  </button>
+                  <button
+                    type="button"
+                    className="inline-flex h-9 items-center justify-center gap-1.5 rounded border border-red-200 bg-white px-3 text-xs font-medium text-red-500 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
+                    disabled={assignmentLoading || assignmentUploading}
+                    onClick={() => {
+                      if (!confirm('안내문과 연결된 GitHub 링크를 삭제하시겠습니까?')) return;
+                      saveAssignmentConfig({ guide_md: '', guide_url: '' })
+                        .catch((error) => alert(error?.response?.data?.error || error.message));
+                    }}
+                  >
+                    <Trash2 size={13} />
+                    삭제
                   </button>
                   <input
                     ref={assignmentGuideFileRef}
@@ -939,18 +964,20 @@ export function DomainContent({
                 <input
                   className="input h-9 flex-1 text-xs"
                   type="url"
-                  value={assignmentConfig?.guide_url || ''}
-                  onChange={(event) => updateAssignmentConfig({ guide_url: event.target.value })}
-                    placeholder="공개 GitHub Markdown 링크 (blob 또는 raw)"
+                  value={guideLinkDraft}
+                  onChange={(event) => setGuideLinkDraft(event.target.value)}
+                  placeholder="공개 GitHub Markdown 링크 (blob 또는 raw)"
                 />
                 <button
                   type="button"
-                  className="btn-secondary py-1 text-xs"
+                  className="btn-secondary h-9 w-24 shrink-0 justify-center px-2 py-0 text-xs"
                   disabled={assignmentLoading || assignmentUploading}
-                  onClick={() => saveAssignmentConfig().catch((error) => alert(error.message))}
+                  onClick={() => saveAssignmentConfig({ guide_url: guideLinkDraft.trim() }).catch((error) => alert(error?.response?.data?.error || error.message))}
                 >
-                  <Link2 size={13} />
-                  최신본 연결
+                  {assignmentConfig?.guide_url && guideLinkDraft.trim() === assignmentConfig.guide_url
+                    ? <RefreshCw size={13} />
+                    : <Link2 size={13} />}
+                  {assignmentConfig?.guide_url && guideLinkDraft.trim() === assignmentConfig.guide_url ? '새로고침' : '연결'}
                 </button>
               </div>
               {assignmentConfig?.guide_fetch_error && (
@@ -975,10 +1002,9 @@ export function DomainContent({
                 <div className="mb-3 flex items-center justify-between gap-2">
                   <div>
                     <h3 className="text-sm font-semibold text-gray-800">배부 자료</h3>
-                    <p className="mt-0.5 text-xs text-gray-500">파일을 올리거나 GitHub 최신본을 연결할 수 있습니다.</p>
                   </div>
                   <button
-                    className="btn-secondary py-1 text-xs"
+                    className="btn-secondary h-9 w-24 shrink-0 justify-center px-2 py-0 text-xs"
                     onClick={async () => {
                       if (hasDesktopFileDialogs()) {
                         const files = await openFiles({ multiple: true });
@@ -1010,19 +1036,21 @@ export function DomainContent({
                     onKeyDown={async (event) => {
                       if (event.key !== 'Enter' || !resourceLinkDraft.trim()) return;
                       event.preventDefault();
-                      if (await addAssignmentResourceLink(resourceLinkDraft.trim())) setResourceLinkDraft('');
+                      await addAssignmentResourceLink(resourceLinkDraft.trim());
                     }}
                   />
                   <button
                     type="button"
-                    className="btn-secondary py-1 text-xs"
+                    className="btn-secondary h-9 w-24 shrink-0 justify-center px-2 py-0 text-xs"
                     disabled={!resourceLinkDraft.trim() || assignmentUploading}
                     onClick={async () => {
-                      if (await addAssignmentResourceLink(resourceLinkDraft.trim())) setResourceLinkDraft('');
+                      await addAssignmentResourceLink(resourceLinkDraft.trim());
                     }}
                   >
-                    <Link2 size={13} />
-                    링크 추가
+                    {assignmentResources.some(resource => resource.source_url === resourceLinkDraft.trim())
+                      ? <RefreshCw size={13} />
+                      : <Link2 size={13} />}
+                    {assignmentResources.some(resource => resource.source_url === resourceLinkDraft.trim()) ? '새로고침' : '연결'}
                   </button>
                 </div>
                 <div className="space-y-2">

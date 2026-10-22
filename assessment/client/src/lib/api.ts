@@ -256,6 +256,7 @@ export const assignmentConfigsApi = {
   },
   addResourceLink: (data: { year: number; semester: number; grade: number; subject: string; domainName: string; url: string; title?: string }) =>
     api.post('/assignment-configs/resource-links', data),
+  refreshResourceLink: (id: number) => api.post(`/assignment-configs/resources/${id}/refresh`),
   deleteResource: (id: number) => api.delete(`/assignment-configs/resources/${id}`),
   resourceFileUrl: (id: number) => `/api/assignment-configs/resources/${id}/file`,
   getHistory: (params: { year: number; semester: number; grade: number; subject: string; domainName: string }) =>

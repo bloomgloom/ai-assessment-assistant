@@ -371,6 +371,26 @@ router.post('/resource-links', async (req: Request, res: Response) => {
   }
 });
 
+router.post('/resources/:id/refresh', async (req: Request, res: Response) => {
+  const resource = await assignmentQueryOne<{ id: number; source_url: string }>(
+    'SELECT id, source_url FROM assignment_resources WHERE id=?',
+    [req.params.id]
+  );
+  if (!resource?.source_url) return res.status(404).json({ error: '연결된 GitHub 자료를 찾을 수 없습니다.' });
+  try {
+    const remote = await fetchGithubSource(resource.source_url);
+    await assignmentExecute(
+      `UPDATE assignment_resources
+       SET mime_type=?, size=?, uploaded_at=datetime('now', 'localtime')
+       WHERE id=?`,
+      [remote.contentType, remote.buffer.length, resource.id]
+    );
+    res.json({ ok: true, size: remote.buffer.length, mime_type: remote.contentType });
+  } catch (error) {
+    res.status(502).json({ error: error instanceof Error ? error.message : String(error) });
+  }
+});
+
 router.get('/resources/:id/file', async (req: Request, res: Response) => {
   const resource = await assignmentQueryOne<{ filename: string; filepath: string; mime_type: string; source_url: string }>(
     'SELECT filename, filepath, mime_type, source_url FROM assignment_resources WHERE id=?',

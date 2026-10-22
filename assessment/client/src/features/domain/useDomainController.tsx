@@ -170,8 +170,8 @@ export function useDomainController() {
 
   useEffect(() => { loadSubjects(); }, [loadSubjects]);
 
-  const loadAssignment = useCallback(async (sub: SubjectItem, domainName: string, silent = false) => {
-    if (!silent) setAssignmentLoading(true);
+  const loadAssignment = useCallback(async (sub: SubjectItem, domainName: string) => {
+    setAssignmentLoading(true);
     try {
       const r = await assignmentConfigsApi.getConfig({
         year: sub.year,
@@ -188,18 +188,14 @@ export function useDomainController() {
       setAssignmentResources([]);
       setAssignmentClasses([]);
     } finally {
-      if (!silent) setAssignmentLoading(false);
+      setAssignmentLoading(false);
     }
   }, []);
 
   useEffect(() => {
     if (activeTab !== 'assignment' || !selectedSubject || !selectedDomain || isDirty) return;
     void loadAssignment(selectedSubject, selectedDomain);
-    const refresh = window.setInterval(() => {
-      void loadAssignment(selectedSubject, selectedDomain, true);
-    }, 30_000);
-    return () => window.clearInterval(refresh);
-  }, [activeTab, selectedSubject, selectedDomain, isDirty, loadAssignment]);
+  }, [activeTab, selectedSubject, selectedDomain, loadAssignment]);
 
   const loadSubjectComments = useCallback(async (sub: SubjectItem) => {
     try {
@@ -501,8 +497,9 @@ export function useDomainController() {
     setIsDirty(true);
   };
 
-  const saveAssignmentConfig = async () => {
+  const saveAssignmentConfig = async (overrides: Partial<AssignmentConfig> = {}) => {
     if (!selectedSubject || !selectedDomain || !assignmentConfig) return true;
+    const nextConfig = { ...assignmentConfig, ...overrides };
     await assignmentConfigsApi.saveConfig({
       year: selectedSubject.year,
       semester: selectedSubject.semester,
@@ -510,11 +507,11 @@ export function useDomainController() {
       subject: selectedSubject.subject,
       domainName: selectedDomain,
       title: `${selectedSubject.subject} ${selectedDomain}`,
-      guide_md: assignmentConfig.guide_md || '',
-      guide_url: assignmentConfig.guide_url || '',
-      allowed_extensions: assignmentConfig.allowed_extensions || '',
-      max_file_size_mb: Number(assignmentConfig.max_file_size_mb) || 50,
-      max_files: Number(assignmentConfig.max_files) || 1,
+      guide_md: nextConfig.guide_md || '',
+      guide_url: nextConfig.guide_url || '',
+      allowed_extensions: nextConfig.allowed_extensions || '',
+      max_file_size_mb: Number(nextConfig.max_file_size_mb) || 50,
+      max_files: Number(nextConfig.max_files) || 1,
     });
     await loadAssignment(selectedSubject, selectedDomain);
     setIsDirty(false);
@@ -567,16 +564,20 @@ export function useDomainController() {
     if (!selectedSubject || !selectedDomain) return false;
     setAssignmentUploading(true);
     try {
-      await saveAssignmentConfig();
-      await assignmentConfigsApi.addResourceLink({
-        year: selectedSubject.year,
-        semester: selectedSubject.semester,
-        grade: selectedSubject.grade,
-        subject: selectedSubject.subject,
-        domainName: selectedDomain,
-        url,
-        title,
-      });
+      const existing = assignmentResources.find(resource => resource.source_url === url);
+      if (existing) {
+        await assignmentConfigsApi.refreshResourceLink(existing.id);
+      } else {
+        await assignmentConfigsApi.addResourceLink({
+          year: selectedSubject.year,
+          semester: selectedSubject.semester,
+          grade: selectedSubject.grade,
+          subject: selectedSubject.subject,
+          domainName: selectedDomain,
+          url,
+          title,
+        });
+      }
       await loadAssignment(selectedSubject, selectedDomain);
       return true;
     } catch (err: any) {
