@@ -261,9 +261,15 @@ router.get('/config', async (req: Request, res: Response) => {
   await syncAssignmentSnapshotsForScope(s, configId);
 
   const config = await assignmentQueryOne<Record<string, unknown>>('SELECT * FROM assignment_configs WHERE id=?', [configId]);
-  if (config?.guide_url) {
+  if (config?.guide_url && String(req.query.refreshGuide) !== 'false') {
     try {
-      config.resolved_guide_md = await fetchGithubText(String(config.guide_url));
+      const latestGuide = await fetchGithubText(String(config.guide_url));
+      await assignmentExecute(
+        `UPDATE assignment_configs SET guide_md=?, updated_at=datetime('now', 'localtime') WHERE id=?`,
+        [latestGuide, configId]
+      );
+      config.guide_md = latestGuide;
+      config.resolved_guide_md = latestGuide;
     } catch (error) {
       config.resolved_guide_md = String(config.guide_md || '');
       config.guide_fetch_error = error instanceof Error ? error.message : String(error);
@@ -292,16 +298,25 @@ router.put('/config', async (req: Request, res: Response) => {
   if (!assertScope(s, res)) return;
   const configId = await ensureConfig(s);
   await syncAssignmentSnapshotsForScope(s, configId);
+  const existing = await assignmentQueryOne<{ guide_url: string; guide_md: string }>(
+    'SELECT guide_url, guide_md FROM assignment_configs WHERE id=?',
+    [configId]
+  );
   const title = `${s.subject} ${s.domainName}`;
   const guideUrl = String(req.body?.guide_url ?? '').trim();
   let guideMd = String(req.body?.guide_md ?? '');
-  if (guideUrl) {
+  const shouldRefreshGuide = !!guideUrl && (
+    guideUrl !== String(existing?.guide_url || '') || req.body?.refresh_guide === true
+  );
+  if (shouldRefreshGuide) {
     try {
       githubFetchUrl(guideUrl);
       guideMd = await fetchGithubText(guideUrl);
     } catch (error) {
       return res.status(400).json({ error: error instanceof Error ? error.message : String(error) });
     }
+  } else if (guideUrl) {
+    guideMd = String(existing?.guide_md || guideMd);
   }
   const allowedExtensions = normalizeAllowedExtensions(String(req.body?.allowed_extensions ?? ''));
   const maxFileSizeMb = Math.max(1, Number(req.body?.max_file_size_mb || 50));

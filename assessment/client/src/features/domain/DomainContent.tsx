@@ -95,7 +95,10 @@ interface DomainContentProps {
   assignmentLoading: boolean;
   assignmentUploading: boolean;
   updateAssignmentConfig: (patch: Partial<AssignmentConfig>) => void;
-  saveAssignmentConfig: (overrides?: Partial<AssignmentConfig>) => Promise<boolean>;
+  saveAssignmentConfig: (
+    overrides?: Partial<AssignmentConfig>,
+    options?: { refreshGuide?: boolean },
+  ) => Promise<boolean>;
   handleAssignmentGuideUpload: (e: React.ChangeEvent<HTMLInputElement>) => void;
   handleAssignmentResourceUpload: (e: React.ChangeEvent<HTMLInputElement>) => void;
   addAssignmentResourceLink: (url: string, title?: string) => Promise<boolean>;
@@ -972,7 +975,12 @@ export function DomainContent({
                   type="button"
                   className="btn-secondary h-9 w-24 shrink-0 justify-center px-2 py-0 text-xs"
                   disabled={assignmentLoading || assignmentUploading}
-                  onClick={() => saveAssignmentConfig({ guide_url: guideLinkDraft.trim() }).catch((error) => alert(error?.response?.data?.error || error.message))}
+                  onClick={() => {
+                    const guideUrl = guideLinkDraft.trim();
+                    const refreshGuide = !!assignmentConfig?.guide_url && guideUrl === assignmentConfig.guide_url;
+                    saveAssignmentConfig({ guide_url: guideUrl }, { refreshGuide })
+                      .catch((error) => alert(error?.response?.data?.error || error.message));
+                  }}
                 >
                   {assignmentConfig?.guide_url && guideLinkDraft.trim() === assignmentConfig.guide_url
                     ? <RefreshCw size={13} />

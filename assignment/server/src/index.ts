@@ -328,6 +328,10 @@ async function prepareRunSnapshot(configId: number) {
   if (config.guide_url) {
     try {
       guideMd = await fetchGithubText(String(config.guide_url));
+      await execute(
+        `UPDATE assignment_configs SET guide_md=?, updated_at=datetime('now', 'localtime') WHERE id=?`,
+        [guideMd, configId]
+      );
     } catch (error) {
       throw new Error(`GitHub 안내문 최신본을 가져오지 못해 평가를 시작하지 않았습니다. ${error instanceof Error ? error.message : String(error)}`);
     }
@@ -553,6 +557,8 @@ function defaultYear(){return String(new Date().getFullYear());}
 function defaultSemester(){const m=new Date().getMonth()+1;return String(m>=3&&m<=8?1:2);}
 async function load(){
  configs=await j('/api/admin/configs');
+ const guideRefreshFailures=configs.filter(c=>c.guide_fetch_error);
+ if(guideRefreshFailures.length)alert('최신 안내문을 불러오지 못한 평가 영역이 있습니다. 저장된 안내문으로 계속합니다.\\n\\n'+guideRefreshFailures.map(c=>c.domain_name+': '+c.guide_fetch_error).join('\\n'));
  options(yearSel,unique(configs,'year'),false); if(unique(configs,'year').map(String).includes(defaultYear())) yearSel.value=defaultYear();
  refreshSemester(false); if([...semesterSel.options].some(o=>o.value===defaultSemester())) semesterSel.value=defaultSemester();
  refreshGrade(false); refreshSubject(false); refreshDomain(false); await loadClasses(); await loadRuns();
@@ -712,7 +718,21 @@ teacherApp.post('/auth', async (req, res) => {
 });
 
 app.get('/api/admin/configs', requireLocal, async (_req, res) => {
-  res.json(await queryAll('SELECT * FROM assignment_configs ORDER BY year, semester, grade, subject, domain_name'));
+  const configs = await queryAll<any>('SELECT * FROM assignment_configs ORDER BY year, semester, grade, subject, domain_name');
+  await Promise.all(configs.map(async (config) => {
+    if (!config.guide_url) return;
+    try {
+      const latestGuide = await fetchGithubText(String(config.guide_url));
+      await execute(
+        `UPDATE assignment_configs SET guide_md=?, updated_at=datetime('now', 'localtime') WHERE id=?`,
+        [latestGuide, config.id]
+      );
+      config.guide_md = latestGuide;
+    } catch (error) {
+      config.guide_fetch_error = error instanceof Error ? error.message : String(error);
+    }
+  }));
+  res.json(configs);
 });
 
 app.get('/api/admin/configs/:id/classes', requireLocal, async (req, res) => {

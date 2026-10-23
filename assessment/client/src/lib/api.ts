@@ -227,8 +227,10 @@ export const artifactsApi = {
 };
 
 export const assignmentConfigsApi = {
-  getConfig: (params: { year: number; semester: number; grade: number; subject: string; domainName: string }) =>
-    api.get('/assignment-configs/config', { params: { ...params, t: Date.now() } }),
+  getConfig: (
+    params: { year: number; semester: number; grade: number; subject: string; domainName: string },
+    refreshGuide = true,
+  ) => api.get('/assignment-configs/config', { params: { ...params, refreshGuide, t: Date.now() } }),
   saveConfig: (data: {
     year: number;
     semester: number;
@@ -241,6 +243,7 @@ export const assignmentConfigsApi = {
     allowed_extensions: string;
     max_file_size_mb: number;
     max_files: number;
+    refresh_guide?: boolean;
   }) => api.put('/assignment-configs/config', data),
   uploadGuideMd: (params: { year: number; semester: number; grade: number; subject: string; domainName: string }, file: File) => {
     const form = new FormData();

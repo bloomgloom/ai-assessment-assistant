@@ -6,7 +6,7 @@ import { UPLOADS_DIR, ensureDir } from './storage';
 import { redactPdfFirstPageTop } from './pdfRedaction';
 import { runPdftoppm } from './pdfRenderer';
 
-const PDF_RENDER_DPI = 150;
+const PDF_RENDER_DPI = 200;
 const PDF_JPEG_QUALITY = 82;
 const CACHE_DIR = path.join(UPLOADS_DIR, 'llm-cache', 'pdf-images');
 ensureDir(CACHE_DIR);

@@ -170,7 +170,7 @@ export function useDomainController() {
 
   useEffect(() => { loadSubjects(); }, [loadSubjects]);
 
-  const loadAssignment = useCallback(async (sub: SubjectItem, domainName: string) => {
+  const loadAssignment = useCallback(async (sub: SubjectItem, domainName: string, refreshGuide = true) => {
     setAssignmentLoading(true);
     try {
       const r = await assignmentConfigsApi.getConfig({
@@ -179,7 +179,7 @@ export function useDomainController() {
         grade: sub.grade,
         subject: sub.subject,
         domainName,
-      });
+      }, refreshGuide);
       setAssignmentConfig(r.data.config);
       setAssignmentResources(r.data.resources || []);
       setAssignmentClasses(r.data.classes || []);
@@ -295,13 +295,9 @@ export function useDomainController() {
       setCommentsMetaPrompts({});
       setDomainAiChats({ standards: [], scoring: [], records: [] });
     }
-    if (domainName !== SUBJECT_COMPREHENSIVE_DOMAIN) {
-      await loadAssignment(sub, domainName);
-    } else {
-      setAssignmentConfig(null);
-      setAssignmentResources([]);
-      setAssignmentClasses([]);
-    }
+    setAssignmentConfig(null);
+    setAssignmentResources([]);
+    setAssignmentClasses([]);
   }, [loadAssignment, loadSubjectComments]);
 
   const handleSelectDomain = useCallback((sub: SubjectItem, domain: string, isCustom: boolean) => {
@@ -368,6 +364,19 @@ export function useDomainController() {
 
   const handleSave = async (): Promise<boolean> => {
     if (!selectedSubject) return false;
+    if (activeTab === 'assignment') {
+      setSaving(true);
+      try {
+        await saveAssignmentConfig();
+        alert('저장되었습니다.');
+        return true;
+      } catch (e: any) {
+        alert(`실시 관리 설정 저장 실패: ${e?.response?.data?.error || e.message || String(e)}`);
+        return false;
+      } finally {
+        setSaving(false);
+      }
+    }
     if (!selectedDomain && subjectAssessmentRatioError) {
       alert(subjectAssessmentRatioError);
       return false;
@@ -446,22 +455,6 @@ export function useDomainController() {
         const eItems = evalItems.map((item, j) => ({ ...item, sort_order: item.item_type === 'formula' ? -1 : j }));
         await criteriaApi.bulkSaveEval(selectedSubject.year, selectedSubject.semester, selectedSubject.grade, selectedSubject.subject, selectedDomain, eItems);
       }
-      if (selectedDomain && assignmentConfig) {
-        await assignmentConfigsApi.saveConfig({
-          year: selectedSubject.year,
-          semester: selectedSubject.semester,
-          grade: selectedSubject.grade,
-          subject: selectedSubject.subject,
-          domainName: selectedDomain,
-          title: assignmentConfig.title || `${selectedSubject.subject} ${selectedDomain}`,
-          guide_md: assignmentConfig.guide_md || '',
-          guide_url: assignmentConfig.guide_url || '',
-          allowed_extensions: assignmentConfig.allowed_extensions || '',
-          max_file_size_mb: Number(assignmentConfig.max_file_size_mb) || 50,
-          max_files: Number(assignmentConfig.max_files) || 1,
-        });
-        await loadAssignment(selectedSubject, selectedDomain);
-      }
       alert('저장되었습니다.');
       setIsDirty(false);
       return true;
@@ -497,7 +490,10 @@ export function useDomainController() {
     setIsDirty(true);
   };
 
-  const saveAssignmentConfig = async (overrides: Partial<AssignmentConfig> = {}) => {
+  const saveAssignmentConfig = async (
+    overrides: Partial<AssignmentConfig> = {},
+    options: { refreshGuide?: boolean } = {},
+  ) => {
     if (!selectedSubject || !selectedDomain || !assignmentConfig) return true;
     const nextConfig = { ...assignmentConfig, ...overrides };
     await assignmentConfigsApi.saveConfig({
@@ -512,8 +508,9 @@ export function useDomainController() {
       allowed_extensions: nextConfig.allowed_extensions || '',
       max_file_size_mb: Number(nextConfig.max_file_size_mb) || 50,
       max_files: Number(nextConfig.max_files) || 1,
+      refresh_guide: options.refreshGuide === true,
     });
-    await loadAssignment(selectedSubject, selectedDomain);
+    await loadAssignment(selectedSubject, selectedDomain, false);
     setIsDirty(false);
     return true;
   };
@@ -551,7 +548,7 @@ export function useDomainController() {
         subject: selectedSubject.subject,
         domainName: selectedDomain,
       }, e.target.files);
-      await loadAssignment(selectedSubject, selectedDomain);
+      await loadAssignment(selectedSubject, selectedDomain, false);
     } catch (err: any) {
       alert(`자료 업로드 실패: ${err?.response?.data?.error || err.message || String(err)}`);
     } finally {
@@ -578,7 +575,7 @@ export function useDomainController() {
           title,
         });
       }
-      await loadAssignment(selectedSubject, selectedDomain);
+      await loadAssignment(selectedSubject, selectedDomain, false);
       return true;
     } catch (err: any) {
       alert(`GitHub 자료 연결 실패: ${err?.response?.data?.error || err.message || String(err)}`);
@@ -592,7 +589,7 @@ export function useDomainController() {
     if (!confirm('자료 파일을 삭제하시겠습니까?')) return;
     await saveAssignmentConfig();
     await assignmentConfigsApi.deleteResource(id);
-    if (selectedSubject && selectedDomain) await loadAssignment(selectedSubject, selectedDomain);
+    if (selectedSubject && selectedDomain) await loadAssignment(selectedSubject, selectedDomain, false);
   };
 
   const getDownloadFilename = (disposition: string, fallback: string) => {
