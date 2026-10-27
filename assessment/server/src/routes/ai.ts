@@ -565,10 +565,10 @@ function scoringOutputSchema(criteria: EvalCriterion[]): AnthropicJsonSchema {
     properties: Object.fromEntries(items.map(({ criterion, key }) => [key, {
       type: 'object',
       properties: {
-        score: { type: 'integer', enum: [0, criterionFullScore(criterion)] },
         reason: { type: 'string' },
+        score: { type: 'integer', enum: [0, criterionFullScore(criterion)] },
       },
-      required: ['score', 'reason'],
+      required: ['reason', 'score'],
       additionalProperties: false,
     }])),
     required: items.map((item) => item.key),
@@ -1048,7 +1048,7 @@ async function prepareGenerationForStudent(params: {
     ? domain === '__SUBJECT_COMPREHENSIVE__'
       ? '위 내용을 종합하여 학생의 역량이 잘 드러나도록 과목별 세부능력 및 특기사항을 작성해주세요.'
       : '위 기준과 학생 산출물을 분석하여 각 항목에 대응하는 활동 기록을 작성해주세요.'
-    : '채점 기준에 따라 학생 산출물을 채점해주세요.';
+    : '채점 기준에 따라 학생 산출물을 분석하고, 각 항목의 판단 근거(reason)를 먼저 작성한 뒤 그 근거에 따른 최종 점수(score)를 마지막에 결정해주세요.';
   appendTaskInstruction(parts, taskInstruction);
 
   return { studentId: student.id, prompt: parts.join('\n\n'), cachePrefix, attachments, evalCriteria, commentsCriteria };
@@ -1088,7 +1088,7 @@ async function prepareCombinedGenerationForStudent(params: {
 
   appendTaskInstruction(
     parts,
-    '위 기준과 학생 산출물을 분석하여 먼저 채점 결과를 작성하고, 그 결과를 근거로 각 항목의 활동 기록을 작성해주세요.',
+    '위 기준과 학생 산출물을 분석하여 각 채점 항목의 판단 근거(reason)를 먼저 작성한 뒤 그 근거에 따른 최종 점수(score)를 결정하고, 그 채점 결과를 바탕으로 각 항목의 활동 기록을 작성해주세요.',
   );
   return { studentId: student.id, prompt: parts.join('\n\n'), cachePrefix, attachments, evalCriteria, commentsCriteria };
 }
