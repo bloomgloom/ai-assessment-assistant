@@ -85,6 +85,7 @@ function normalizeAllowedExtensions(value: string): string {
               id: String(item.id || item.slot_id || `slot-${index + 1}-${extension}`).trim(),
               name: String(item.name || item.content || item.label || extension).trim(),
               extension,
+              required: item.required !== false && item.required !== 0,
               max_file_size_mb: Math.max(1, Number(item.max_file_size_mb || item.maxFileSizeMb || 50)),
               max_files: Math.max(1, Number(item.max_files || item.maxFiles || 1)),
             };
@@ -105,6 +106,7 @@ function normalizeAllowedExtensions(value: string): string {
     id: `slot-${index + 1}-${extension}`,
     name: extension,
     extension,
+    required: true,
     max_file_size_mb: 50,
     max_files: 1,
   })));

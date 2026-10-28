@@ -171,6 +171,7 @@ interface AssignmentExtensionRule {
   id: string;
   name: string;
   extension: string;
+  required: boolean;
   max_file_size_mb: number;
   max_files: number;
 }
@@ -186,6 +187,7 @@ function parseExtensionRules(value: string, fallbackSize = 50, fallbackFiles = 1
             id: String(item.id || item.slot_id || `slot-${index + 1}-${extension}`),
             name: String(item.name || item.content || item.label || extension).trim(),
             extension,
+            required: item.required !== false && item.required !== 0,
             max_file_size_mb: Math.max(1, Number(item.max_file_size_mb || item.maxFileSizeMb || fallbackSize)),
             max_files: Math.max(1, Number(item.max_files || item.maxFiles || fallbackFiles)),
           };
@@ -200,6 +202,7 @@ function parseExtensionRules(value: string, fallbackSize = 50, fallbackFiles = 1
     id: `slot-${index + 1}-${extension}`,
     name: extension,
     extension,
+    required: true,
     max_file_size_mb: Math.max(1, Number(fallbackSize) || 50),
     max_files: Math.max(1, Number(fallbackFiles) || 1),
   }));
@@ -212,6 +215,7 @@ function serializeExtensionRules(items: AssignmentExtensionRule[]) {
         id: item.id.trim(),
         name: item.name.trim(),
         extension: item.extension.trim().replace(/^\./, '').toLowerCase(),
+        required: item.required !== false,
         max_file_size_mb: Math.max(1, Number(item.max_file_size_mb) || 50),
         max_files: Math.max(1, Number(item.max_files) || 1),
       }))
@@ -432,6 +436,7 @@ export function DomainContent({
         id: item.id,
         name: item.name.trim(),
         extension: item.extension.trim().replace(/^\./, '').toLowerCase(),
+        required: item.required !== false,
         max_file_size_mb: Math.max(1, Number(item.max_file_size_mb) || 50),
         max_files: Math.max(1, Number(item.max_files) || 1),
       }))
@@ -1152,15 +1157,16 @@ export function DomainContent({
                     <div className="rounded-md border border-gray-300 bg-white p-2">
                       <div className="space-y-1">
                         {assignmentExtensionRules.length > 0 && (
-                          <div className="grid grid-cols-[minmax(100px,1.5fr)_80px_90px_70px] gap-1 px-2 pb-1 text-[11px] font-medium text-gray-400">
+                          <div className="grid grid-cols-[minmax(100px,1.5fr)_80px_64px_90px_70px] gap-1 px-2 pb-1 text-[11px] font-medium text-gray-400">
                             <span className="text-center">내용</span>
                             <span className="text-center">확장자</span>
+                            <span className="text-center">필수</span>
                             <span className="text-center">최대 용량</span>
                             <span className="text-center">파일 수</span>
                           </div>
                         )}
                         {assignmentExtensionRules.map((rule, index) => (
-                          <div key={rule.id} className="grid grid-cols-[minmax(100px,1.5fr)_80px_90px_70px] items-center gap-1 rounded border border-gray-200 bg-gray-50 px-2 py-1.5">
+                          <div key={rule.id} className="grid grid-cols-[minmax(100px,1.5fr)_80px_64px_90px_70px] items-center gap-1 rounded border border-gray-200 bg-gray-50 px-2 py-1.5">
                             <input
                               className="input h-7 min-w-0 px-1.5 py-0 text-xs"
                               defaultValue={rule.name}
@@ -1185,6 +1191,19 @@ export function DomainContent({
                                   <X size={8} />
                                 </button>
                               </div>
+                            </div>
+                            <div className="flex justify-center">
+                              <input
+                                className="h-4 w-4 accent-blue-600"
+                                type="checkbox"
+                                checked={rule.required}
+                                onChange={(e) => {
+                                  const next = [...assignmentExtensionRules];
+                                  next[index] = { ...rule, required: e.target.checked };
+                                  updateAssignmentExtensionRules(next);
+                                }}
+                                aria-label={`${rule.name} 필수 제출`}
+                              />
                             </div>
                             <div className="flex items-center justify-center gap-1">
                               <input
@@ -1239,7 +1258,7 @@ export function DomainContent({
                             const next = extensionDraft.trim().replace(/^\./, '').toLowerCase();
                             const name = contentDraft.trim();
                             if (!name || !next) return;
-                            updateAssignmentExtensionRules([...assignmentExtensionRules, { id: crypto.randomUUID(), name, extension: next, max_file_size_mb: 50, max_files: 1 }]);
+                            updateAssignmentExtensionRules([...assignmentExtensionRules, { id: crypto.randomUUID(), name, extension: next, required: true, max_file_size_mb: 50, max_files: 1 }]);
                             setContentDraft('');
                             setExtensionDraft('');
                           }}
@@ -1252,7 +1271,7 @@ export function DomainContent({
                             const next = extensionDraft.trim().replace(/^\./, '').toLowerCase();
                             const name = contentDraft.trim();
                             if (!name || !next) return;
-                            updateAssignmentExtensionRules([...assignmentExtensionRules, { id: crypto.randomUUID(), name, extension: next, max_file_size_mb: 50, max_files: 1 }]);
+                            updateAssignmentExtensionRules([...assignmentExtensionRules, { id: crypto.randomUUID(), name, extension: next, required: true, max_file_size_mb: 50, max_files: 1 }]);
                             setContentDraft('');
                             setExtensionDraft('');
                           }}

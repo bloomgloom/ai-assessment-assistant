@@ -223,6 +223,7 @@ interface SubmissionRule {
   id: string;
   name: string;
   extension: string;
+  required: boolean;
   max_file_size_mb: number;
   max_files: number;
 }
@@ -238,6 +239,7 @@ function submissionRules(value: string, fallbackSize = 50, fallbackFiles = 1): S
             id: String(item.id || item.slot_id || `slot-${index + 1}-${extension}`).trim(),
             name: String(item.name || item.content || item.label || extension).trim(),
             extension,
+            required: item.required !== false && item.required !== 0,
             max_file_size_mb: Math.max(1, Number(item.max_file_size_mb || item.maxFileSizeMb || fallbackSize)),
             max_files: Math.max(1, Number(item.max_files || item.maxFiles || fallbackFiles)),
           };
@@ -252,13 +254,14 @@ function submissionRules(value: string, fallbackSize = 50, fallbackFiles = 1): S
     id: `slot-${index + 1}-${extension}`,
     name: extension,
     extension,
+    required: true,
     max_file_size_mb: Math.max(1, Number(fallbackSize) || 50),
     max_files: Math.max(1, Number(fallbackFiles) || 1),
   }));
 }
 
 function extensionLabel(rule: SubmissionRule) {
-  return `${rule.name} / ${rule.extension.toUpperCase()} / 최대 ${rule.max_file_size_mb}MB / ${rule.max_files}개`;
+  return `${rule.name} / ${rule.required ? '필수' : '선택'} / ${rule.extension.toUpperCase()} / 최대 ${rule.max_file_size_mb}MB / ${rule.max_files}개`;
 }
 
 function page(title: string, body: string) {
@@ -468,7 +471,7 @@ async function renderStudentPage(run: any, submitPath: string, res: any) {
     return `<section class="card"><h2>${escapeHtml(resource.filename)}</h2><div class="guide">${markdown(content)}</div></section>`;
   }).join('');
   const rules = submissionRules(run.allowed_extensions, Number(run.max_file_size_mb || 50), Number(run.max_files || 1));
-  const uploadRules = rules.length ? rules : [{ id: 'default', name: '파일', extension: '', max_file_size_mb: Number(run.max_file_size_mb || 50), max_files: Number(run.max_files || 1) }];
+  const uploadRules = rules.length ? rules : [{ id: 'default', name: '파일', extension: '', required: true, max_file_size_mb: Number(run.max_file_size_mb || 50), max_files: Number(run.max_files || 1) }];
   res.send(page(run.title || '수행평가 제출', `
 <header><strong>${escapeHtml(run.title || '수행평가 제출')}</strong><span class="${run.is_open ? 'ok' : 'danger'}">${run.is_open ? '제출 가능' : '제출 마감'}</span></header>
 <main class="grid student-layout">
@@ -484,7 +487,7 @@ async function renderStudentPage(run: any, submitPath: string, res: any) {
 const rules=${JSON.stringify(uploadRules).replace(/</g, '\\u003c')};
 let selectedFiles=rules.map(()=>[]);
 f.elements.name.oninput=()=>{f.elements.name.value=f.elements.name.value.replace(/\\s+/g,'');};
-function label(rule){return rule.name+(rule.extension?' (.'+rule.extension+')':'');}
+function label(rule){return rule.name+(rule.required?' · 필수':' · 선택')+(rule.extension?' (.'+rule.extension+')':'');}
 function limitText(rule){return (rule.extension?rule.extension:'모든 확장자')+' / 최대 '+rule.max_file_size_mb+'MB / '+rule.max_files+'개';}
 function renderFiles(){uploadGroups.innerHTML=rules.map((rule,groupIndex)=>{
  const rows=selectedFiles[groupIndex].map((file,fileIndex)=>'<div class="file-row"><span>'+file.name+'</span><button type="button" onclick="removeFile('+groupIndex+','+fileIndex+')">X</button></div>').join('')||'<p class="muted">선택한 파일이 없습니다.</p>';
@@ -1290,6 +1293,7 @@ async function handleSubmission(req: any, res: any, run: any) {
     id: 'default',
     name: '파일',
     extension: '',
+    required: true,
     max_file_size_mb: Number(run.max_file_size_mb || 50),
     max_files: Number(run.max_files || 1),
   }];
@@ -1338,7 +1342,7 @@ async function handleSubmission(req: any, res: any, run: any) {
       ...existingSlots.map(row => String(row.submission_slot_id || '')),
       ...submittedSlotIds,
     ]);
-    const missingRules = rules.filter(rule => !coveredSlotIds.has(rule.id));
+    const missingRules = rules.filter(rule => rule.required && !coveredSlotIds.has(rule.id));
     if (missingRules.length) {
       const reason = `아직 제출하지 않은 항목이 있습니다: ${missingRules.map(rule => rule.name).join(', ')}`;
       await recordRejectedSubmission(req, run, student, studentNum, classNum, seatNum, name, files[0], reason);
