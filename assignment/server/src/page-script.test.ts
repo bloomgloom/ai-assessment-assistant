@@ -17,9 +17,21 @@ async function freePort(): Promise<number> {
   });
 }
 
-function assertPageScripts(html: string, label: string) {
-  const scripts = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map(match => match[1]);
-  if (!scripts.length) throw new Error(`${label}: 검사할 인라인 스크립트가 없습니다.`);
+async function assertPageScripts(html: string, label: string, pageUrl: string) {
+  const tags = [...html.matchAll(/<script([^>]*)>([\s\S]*?)<\/script>/g)];
+  const scripts: string[] = [];
+  for (const [, attributes, inlineScript] of tags) {
+    if (/type=["']application\/json["']/.test(attributes)) continue;
+    const src = attributes.match(/src=["']([^"']+)["']/)?.[1];
+    if (!src) {
+      scripts.push(inlineScript);
+      continue;
+    }
+    const response = await fetch(new URL(src, pageUrl));
+    if (!response.ok) throw new Error(`${label}: 스크립트 ${src} HTTP ${response.status}`);
+    scripts.push(await response.text());
+  }
+  if (!scripts.length) throw new Error(`${label}: 검사할 스크립트가 없습니다.`);
   scripts.forEach((script, index) => {
     try {
       new Function(script);
@@ -80,7 +92,7 @@ async function main() {
     ] as const) {
       const response = await fetch(url);
       if (!response.ok) throw new Error(`${label}: HTTP ${response.status}`);
-      assertPageScripts(await response.text(), label);
+      await assertPageScripts(await response.text(), label, url);
     }
   } finally {
     child.kill('SIGTERM');
