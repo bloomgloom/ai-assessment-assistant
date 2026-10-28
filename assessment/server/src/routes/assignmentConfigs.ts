@@ -79,24 +79,35 @@ function normalizeAllowedExtensions(value: string): string {
     if (Array.isArray(parsed)) {
       return JSON.stringify(
         parsed
-          .map(item => ({
-            extension: String(item.extension || item.ext || '').trim().replace(/^\./, '').toLowerCase(),
-            max_file_size_mb: Math.max(1, Number(item.max_file_size_mb || item.maxFileSizeMb || 50)),
-            max_files: Math.max(1, Number(item.max_files || item.maxFiles || 1)),
-          }))
-          .filter(item => item.extension)
-          .filter((item, index, arr) => arr.findIndex(other => other.extension === item.extension) === index)
+          .map((item, index) => {
+            const extension = String(item.extension || item.ext || '').trim().replace(/^\./, '').toLowerCase();
+            return {
+              id: String(item.id || item.slot_id || `slot-${index + 1}-${extension}`).trim(),
+              name: String(item.name || item.content || item.label || extension).trim(),
+              extension,
+              max_file_size_mb: Math.max(1, Number(item.max_file_size_mb || item.maxFileSizeMb || 50)),
+              max_files: Math.max(1, Number(item.max_files || item.maxFiles || 1)),
+            };
+          })
+          .filter(item => item.id && item.name && item.extension)
+          .filter((item, index, arr) => arr.findIndex(other => other.id === item.id) === index)
       );
     }
   } catch {
     // Legacy newline/comma separated extension list.
   }
-  return String(value || '')
+  const extensions = String(value || '')
     .split(/[\s,]+/)
     .map(item => item.trim().replace(/^\./, '').toLowerCase())
     .filter(Boolean)
-    .filter((item, index, arr) => arr.indexOf(item) === index)
-    .join('\n');
+    .filter((item, index, arr) => arr.indexOf(item) === index);
+  return JSON.stringify(extensions.map((extension, index) => ({
+    id: `slot-${index + 1}-${extension}`,
+    name: extension,
+    extension,
+    max_file_size_mb: 50,
+    max_files: 1,
+  })));
 }
 
 async function ensureConfig(s: ReturnType<typeof scope>) {
@@ -610,7 +621,17 @@ router.get('/history', async (req: Request, res: Response) => {
               OR (sub.student_num=rst.student_num AND sub.name=rst.name))
         )) AS submitted_student_count,
        (SELECT COUNT(*) FROM assignment_submissions sub
-        WHERE sub.run_id=run.id AND sub.status='accepted') AS accepted_file_count,
+        WHERE sub.run_id=run.id AND sub.status='accepted' AND sub.submission_slot_id!=''
+          AND NOT EXISTS (
+            SELECT 1 FROM assignment_submissions newer
+            WHERE newer.run_id=sub.run_id AND newer.status='accepted'
+              AND newer.submission_slot_id=sub.submission_slot_id
+              AND (newer.assignment_student_id=sub.assignment_student_id
+                OR (newer.student_num=sub.student_num AND newer.name=sub.name))
+              AND newer.submission_batch_id!=sub.submission_batch_id
+              AND (newer.submitted_at>sub.submitted_at
+                OR (newer.submitted_at=sub.submitted_at AND newer.id>sub.id))
+          )) AS accepted_file_count,
        (SELECT COUNT(*) FROM assignment_submissions sub WHERE sub.run_id=run.id) AS submission_event_count,
        (SELECT COUNT(*) FROM assignment_run_students rst
         WHERE rst.run_id=run.id AND EXISTS (
@@ -653,13 +674,39 @@ router.get('/history/:runId', async (req: Request, res: Response) => {
     [req.params.runId]
   );
   const submissions = await assignmentQueryAll(
-    `SELECT id, assignment_student_id, student_num, class_num, seat_num, name, ip_address,
-            original_filename, size, status, reject_reason, teacher_checked,
-            teacher_checked_at, submitted_at
-     FROM assignment_submissions
-     WHERE run_id=?
+    `WITH ranked_accepted AS (
+       SELECT sub.*,
+              DENSE_RANK() OVER (
+                PARTITION BY COALESCE(CAST(sub.assignment_student_id AS TEXT), 'identity:' || sub.student_num || ':' || sub.name), sub.submission_slot_id
+                ORDER BY sub.submitted_at DESC, sub.submission_batch_id DESC
+              ) AS current_rank
+       FROM assignment_submissions sub
+       WHERE sub.run_id=? AND sub.status='accepted' AND sub.submission_slot_id!=''
+     ), ranked_other AS (
+       SELECT sub.*,
+              ROW_NUMBER() OVER (
+                PARTITION BY COALESCE(CAST(sub.assignment_student_id AS TEXT), 'identity:' || sub.student_num || ':' || sub.name)
+                ORDER BY sub.submitted_at DESC, sub.id DESC
+              ) AS current_rank
+       FROM assignment_submissions sub
+       WHERE sub.run_id=? AND sub.status!='accepted'
+         AND NOT EXISTS (
+           SELECT 1 FROM assignment_submissions accepted
+           WHERE accepted.run_id=sub.run_id AND accepted.status='accepted'
+             AND (accepted.assignment_student_id=sub.assignment_student_id
+               OR (accepted.student_num=sub.student_num AND accepted.name=sub.name))
+         )
+     ), current_submissions AS (
+       SELECT * FROM ranked_accepted WHERE current_rank=1
+       UNION ALL
+       SELECT * FROM ranked_other WHERE current_rank=1
+     )
+     SELECT id, assignment_student_id, student_num, class_num, seat_num, name, ip_address,
+            submission_slot_id, submission_slot_name, original_filename, size, status,
+            reject_reason, teacher_checked, teacher_checked_at, submitted_at
+     FROM current_submissions
      ORDER BY submitted_at DESC, id DESC`,
-    [req.params.runId]
+    [req.params.runId, req.params.runId]
   );
   res.json({ run, students, submissions });
 });
@@ -669,14 +716,23 @@ router.get('/submissions', async (req: Request, res: Response) => {
   if (!assertScope(s, res)) return;
   const room = req.query.room ? String(req.query.room) : '';
   const rows = await assignmentQueryAll(
-    `SELECT sub.*, ac.room, cfg.title, cfg.domain_name
-     FROM assignment_submissions sub
-     JOIN assignment_runs run ON run.id=sub.run_id
-     JOIN assignment_classes ac ON ac.id=run.assignment_class_id
-     JOIN assignment_configs cfg ON cfg.id=run.config_id
-     WHERE cfg.year=? AND cfg.semester=? AND cfg.grade=? AND cfg.subject=? AND cfg.domain_name=?
-       AND (?='' OR ac.room=?)
-     ORDER BY sub.submitted_at DESC, sub.id DESC`,
+    `WITH ranked AS (
+       SELECT sub.*, ac.room, cfg.title, cfg.domain_name,
+              DENSE_RANK() OVER (
+                PARTITION BY cfg.id, ac.id,
+                  COALESCE(CAST(sub.assignment_student_id AS TEXT), 'identity:' || sub.student_num || ':' || sub.name),
+                  sub.submission_slot_id
+                ORDER BY sub.submitted_at DESC, sub.submission_batch_id DESC
+              ) AS current_rank
+       FROM assignment_submissions sub
+       JOIN assignment_runs run ON run.id=sub.run_id
+       JOIN assignment_classes ac ON ac.id=run.assignment_class_id
+       JOIN assignment_configs cfg ON cfg.id=run.config_id
+       WHERE cfg.year=? AND cfg.semester=? AND cfg.grade=? AND cfg.subject=? AND cfg.domain_name=?
+         AND (?='' OR ac.room=?) AND sub.status='accepted' AND sub.submission_slot_id!=''
+     )
+     SELECT * FROM ranked WHERE current_rank=1
+     ORDER BY submitted_at DESC, id DESC`,
     [s.year, s.semester, s.grade, s.subject, s.domainName, room, room]
   );
   res.json(rows);

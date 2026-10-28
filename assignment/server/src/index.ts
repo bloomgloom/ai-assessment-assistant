@@ -220,6 +220,8 @@ function allowedExtensions(value: string) {
 }
 
 interface SubmissionRule {
+  id: string;
+  name: string;
   extension: string;
   max_file_size_mb: number;
   max_files: number;
@@ -230,18 +232,25 @@ function submissionRules(value: string, fallbackSize = 50, fallbackFiles = 1): S
     const parsed = JSON.parse(value || '[]');
     if (Array.isArray(parsed)) {
       return parsed
-        .map(item => ({
-          extension: String(item.extension || item.ext || '').trim().replace(/^\./, '').toLowerCase(),
-          max_file_size_mb: Math.max(1, Number(item.max_file_size_mb || item.maxFileSizeMb || fallbackSize)),
-          max_files: Math.max(1, Number(item.max_files || item.maxFiles || fallbackFiles)),
-        }))
-        .filter(item => item.extension)
-        .filter((item, index, arr) => arr.findIndex(other => other.extension === item.extension) === index);
+        .map((item, index) => {
+          const extension = String(item.extension || item.ext || '').trim().replace(/^\./, '').toLowerCase();
+          return {
+            id: String(item.id || item.slot_id || `slot-${index + 1}-${extension}`).trim(),
+            name: String(item.name || item.content || item.label || extension).trim(),
+            extension,
+            max_file_size_mb: Math.max(1, Number(item.max_file_size_mb || item.maxFileSizeMb || fallbackSize)),
+            max_files: Math.max(1, Number(item.max_files || item.maxFiles || fallbackFiles)),
+          };
+        })
+        .filter(item => item.id && item.name && item.extension)
+        .filter((item, index, arr) => arr.findIndex(other => other.id === item.id) === index);
     }
   } catch {
     // Legacy newline/comma separated extension list.
   }
-  return allowedExtensions(value).map(extension => ({
+  return allowedExtensions(value).map((extension, index) => ({
+    id: `slot-${index + 1}-${extension}`,
+    name: extension,
     extension,
     max_file_size_mb: Math.max(1, Number(fallbackSize) || 50),
     max_files: Math.max(1, Number(fallbackFiles) || 1),
@@ -249,7 +258,7 @@ function submissionRules(value: string, fallbackSize = 50, fallbackFiles = 1): S
 }
 
 function extensionLabel(rule: SubmissionRule) {
-  return `${rule.extension.toUpperCase()} / 최대 ${rule.max_file_size_mb}MB / ${rule.max_files}개`;
+  return `${rule.name} / ${rule.extension.toUpperCase()} / 최대 ${rule.max_file_size_mb}MB / ${rule.max_files}개`;
 }
 
 function page(title: string, body: string) {
@@ -321,7 +330,7 @@ type PreparedRunResource = {
 };
 
 async function prepareRunSnapshot(configId: number) {
-  const config = await queryOne<any>('SELECT guide_md, guide_url FROM assignment_configs WHERE id=?', [configId]);
+  const config = await queryOne<any>('SELECT guide_md, guide_url, allowed_extensions FROM assignment_configs WHERE id=?', [configId]);
   if (!config) throw new Error('평가 실시 설정을 찾을 수 없습니다.');
 
   let guideMd = String(config.guide_md || '');
@@ -401,7 +410,13 @@ async function prepareRunSnapshot(configId: number) {
         sourceUrl: String(resource.source_url || ''),
       });
     }
-    return { guideMd, resources: prepared, snapshotDir: resources.length ? snapshotDir : '', warnings };
+    return {
+      guideMd,
+      submissionRules: String(config.allowed_extensions || ''),
+      resources: prepared,
+      snapshotDir: resources.length ? snapshotDir : '',
+      warnings,
+    };
   } catch (error) {
     try { if (fs.existsSync(snapshotDir)) fs.rmSync(snapshotDir, { recursive: true, force: true }); } catch {}
     throw error;
@@ -413,7 +428,8 @@ async function currentOpenRun() {
     `SELECT run.id, run.config_id, run.assignment_class_id, run.share_code,
             run.viewer_code, run.is_open, run.started_at, run.ended_at, run.guide_md_snapshot,
             cfg.year, cfg.semester, cfg.grade, cfg.subject, cfg.domain_name, cfg.title,
-            cfg.guide_md, cfg.guide_url, cfg.allowed_extensions,
+            cfg.guide_md, cfg.guide_url,
+            COALESCE(NULLIF(run.submission_rules_snapshot, ''), cfg.allowed_extensions) AS allowed_extensions,
             cfg.max_file_size_mb, cfg.max_files, cfg.updated_at,
             ac.id AS ac_id, ac.room
      FROM assignment_runs run
@@ -430,7 +446,8 @@ async function runByShareCode(shareCode: string) {
     `SELECT run.id, run.config_id, run.assignment_class_id, run.share_code,
             run.viewer_code, run.is_open, run.started_at, run.ended_at, run.guide_md_snapshot,
             cfg.year, cfg.semester, cfg.grade, cfg.subject, cfg.domain_name, cfg.title,
-            cfg.guide_md, cfg.guide_url, cfg.allowed_extensions,
+            cfg.guide_md, cfg.guide_url,
+            COALESCE(NULLIF(run.submission_rules_snapshot, ''), cfg.allowed_extensions) AS allowed_extensions,
             cfg.max_file_size_mb, cfg.max_files, cfg.updated_at,
             ac.id AS ac_id, ac.room
      FROM assignment_runs run
@@ -451,7 +468,7 @@ async function renderStudentPage(run: any, submitPath: string, res: any) {
     return `<section class="card"><h2>${escapeHtml(resource.filename)}</h2><div class="guide">${markdown(content)}</div></section>`;
   }).join('');
   const rules = submissionRules(run.allowed_extensions, Number(run.max_file_size_mb || 50), Number(run.max_files || 1));
-  const uploadRules = rules.length ? rules : [{ extension: '', max_file_size_mb: Number(run.max_file_size_mb || 50), max_files: Number(run.max_files || 1) }];
+  const uploadRules = rules.length ? rules : [{ id: 'default', name: '파일', extension: '', max_file_size_mb: Number(run.max_file_size_mb || 50), max_files: Number(run.max_files || 1) }];
   res.send(page(run.title || '수행평가 제출', `
 <header><strong>${escapeHtml(run.title || '수행평가 제출')}</strong><span class="${run.is_open ? 'ok' : 'danger'}">${run.is_open ? '제출 가능' : '제출 마감'}</span></header>
 <main class="grid student-layout">
@@ -464,10 +481,10 @@ async function renderStudentPage(run: any, submitPath: string, res: any) {
  </div>
 </main>
 <script>
-const rules=${JSON.stringify(uploadRules)};
+const rules=${JSON.stringify(uploadRules).replace(/</g, '\\u003c')};
 let selectedFiles=rules.map(()=>[]);
 f.elements.name.oninput=()=>{f.elements.name.value=f.elements.name.value.replace(/\\s+/g,'');};
-function label(rule){return rule.extension?rule.extension.toUpperCase()+' 파일':'파일';}
+function label(rule){return rule.name+(rule.extension?' (.'+rule.extension+')':'');}
 function limitText(rule){return (rule.extension?rule.extension:'모든 확장자')+' / 최대 '+rule.max_file_size_mb+'MB / '+rule.max_files+'개';}
 function renderFiles(){uploadGroups.innerHTML=rules.map((rule,groupIndex)=>{
  const rows=selectedFiles[groupIndex].map((file,fileIndex)=>'<div class="file-row"><span>'+file.name+'</span><button type="button" onclick="removeFile('+groupIndex+','+fileIndex+')">X</button></div>').join('')||'<p class="muted">선택한 파일이 없습니다.</p>';
@@ -477,7 +494,7 @@ function renderFiles(){uploadGroups.innerHTML=rules.map((rule,groupIndex)=>{
 function addFiles(groupIndex,input){const rule=rules[groupIndex];for(const file of input.files||[]){if(selectedFiles[groupIndex].length<rule.max_files)selectedFiles[groupIndex].push(file);}input.value='';renderFiles();}
 function removeFile(groupIndex,fileIndex){selectedFiles[groupIndex].splice(fileIndex,1);renderFiles();}
 noFile.onchange=()=>{fileSection.classList.toggle('uploads-disabled',noFile.checked);};
-f.onsubmit=async(e)=>{e.preventDefault();const allFiles=selectedFiles.flat();if(!noFile.checked&&allFiles.length===0){msg.textContent='파일을 추가하거나 파일 미제출을 체크하세요.';msg.className='danger';return;}msg.textContent='제출 중...';const fd=new FormData(f);fd.delete('files');if(!noFile.checked)allFiles.forEach(file=>fd.append('files',file));const r=await fetch('${submitPath}',{method:'POST',body:fd});const data=await r.json().catch(()=>({error:'제출 실패'}));msg.textContent=r.ok?data.message:data.error;msg.className=r.ok?'ok':'danger';if(r.ok){f.reset();selectedFiles=rules.map(()=>[]);fileSection.classList.remove('uploads-disabled');renderFiles();}};
+f.onsubmit=async(e)=>{e.preventDefault();const allFiles=selectedFiles.flat();if(!noFile.checked&&allFiles.length===0){msg.textContent='파일을 추가하거나 파일 미제출을 체크하세요.';msg.className='danger';return;}msg.textContent='제출 중...';const fd=new FormData(f);fd.delete('files');if(!noFile.checked)selectedFiles.forEach((files,groupIndex)=>files.forEach(file=>{fd.append('submissionSlotIds',rules[groupIndex].id);fd.append('files',file);}));const r=await fetch('${submitPath}',{method:'POST',body:fd});const data=await r.json().catch(()=>({error:'제출 실패'}));msg.textContent=r.ok?data.message:data.error;msg.className=r.ok?'ok':'danger';if(r.ok){f.reset();selectedFiles=rules.map(()=>[]);fileSection.classList.remove('uploads-disabled');renderFiles();}};
 renderFiles();
 </script>`));
 }
@@ -494,7 +511,7 @@ async function submissionStatusForRun(runId: string | number, sort: string) {
   const order = sort === 'default'
     ? 'rst.sort_order ASC, rst.id ASC'
     : 'rst.is_absent ASC, CASE WHEN sub.id IS NULL THEN 1 ELSE 0 END ASC, sub.submitted_at DESC, sub.id DESC, rst.class_num ASC, rst.seat_num ASC, rst.name ASC';
-  return queryAll(
+  const rows = await queryAll<any>(
     `SELECT
        rst.id AS run_student_id,
        rst.assignment_student_id,
@@ -544,6 +561,54 @@ async function submissionStatusForRun(runId: string | number, sort: string) {
      ORDER BY ${order}`,
     [runId, run.domain_name, runId, run.domain_name, runId, runId]
   );
+  const activeFiles = await queryAll<any>(
+    `SELECT sub.id, sub.assignment_student_id, sub.student_num, sub.name,
+            sub.submission_slot_id, sub.submission_slot_name, sub.original_filename,
+            sub.submitted_at, sub.ip_address, sub.teacher_checked, sub.teacher_checked_at
+     FROM assignment_submissions sub
+     WHERE sub.run_id=? AND sub.status='accepted' AND sub.submission_slot_id!=''
+       AND NOT EXISTS (
+         SELECT 1
+         FROM assignment_submissions newer
+         WHERE newer.run_id=sub.run_id AND newer.status='accepted'
+           AND newer.submission_slot_id=sub.submission_slot_id
+           AND (newer.assignment_student_id=sub.assignment_student_id
+             OR (newer.student_num=sub.student_num AND newer.name=sub.name))
+           AND newer.submission_batch_id!=sub.submission_batch_id
+           AND (newer.submitted_at>sub.submitted_at
+             OR (newer.submitted_at=sub.submitted_at AND newer.id>sub.id))
+       )
+     ORDER BY sub.submission_slot_name, sub.id`,
+    [runId]
+  );
+  const filesByStudent = new Map<string, any[]>();
+  for (const file of activeFiles) {
+    const key = file.assignment_student_id != null
+      ? `id:${Number(file.assignment_student_id)}`
+      : `identity:${Number(file.student_num)}\u0000${file.name}`;
+    const current = filesByStudent.get(key) || [];
+    current.push(file);
+    filesByStudent.set(key, current);
+  }
+  return rows.map(row => {
+    const key = row.assignment_student_id != null
+      ? `id:${Number(row.assignment_student_id)}`
+      : `identity:${Number(row.student_num)}\u0000${row.name}`;
+    const files = filesByStudent.get(key) || [];
+    if (!files.length) return { ...row, active_files: [] };
+    const latest = [...files].sort((a, b) => Number(b.id) - Number(a.id))[0];
+    return {
+      ...row,
+      submission_id: latest.id,
+      submitted_at: latest.submitted_at,
+      ip_address: latest.ip_address,
+      original_filename: latest.original_filename,
+      status: 'accepted',
+      reject_reason: '',
+      teacher_checked: files.every(file => Number(file.teacher_checked) === 1) ? 1 : 0,
+      active_files: files,
+    };
+  });
 }
 
 app.get(['/', '/admin'], requireLocal, (_req, res) => {
@@ -582,6 +647,7 @@ const teacherBase='${ips[0] || '127.0.0.1'}:${TEACHER_PORT}';
 const studentBase='${ips[0] || '127.0.0.1'}:${STUDENT_PORT}';
 let configs=[], classes=[], currentRun=null, suppressRoster=false, rosterRows=[], runActionPending=false;
 async function j(url,opt){const r=await fetch(url,opt);if(!r.ok)throw new Error(await r.text());return r.json();}
+function h(value){return String(value??'').replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));}
 function unique(rows,key){return [...new Set(rows.map(r=>r[key]))].sort((a,b)=>String(a).localeCompare(String(b),'ko',{numeric:true}));}
 function selectedConfig(){return configs.find(c=>String(c.year)===yearSel.value&&String(c.semester)===semesterSel.value&&String(c.grade)===gradeSel.value&&c.subject===subjectSel.value&&c.domain_name===domainSel.value);}
 function options(sel,items,keep){const old=keep?sel.value:'';sel.innerHTML=items.map(v=>'<option value="'+v+'">'+v+'</option>').join('');if(items.map(String).includes(old))sel.value=old;}
@@ -639,7 +705,7 @@ function rowHtml(s){
  const submitted=!!s.submission_id;
  const checked=Number(s.teacher_checked||0)===1;
  const confirmable=submitted&&(s.status==='accepted'||s.status==='no_file');
- const file=s.status==='accepted'?'<a target="_blank" rel="noopener" href="/file-preview/assignment/'+s.submission_id+'?filename='+encodeURIComponent(s.original_filename||'')+'">'+s.original_filename+'</a>':(s.status==='rejected'?'<span class="danger">저장 안 됨</span>':'<span class="muted">-</span>');
+ const file=s.status==='accepted'?(Array.isArray(s.active_files)&&s.active_files.length?s.active_files.map(item=>'<div><span class="muted">'+h(item.submission_slot_name||'파일')+'</span> <a target="_blank" rel="noopener" href="/file-preview/assignment/'+item.id+'?filename='+encodeURIComponent(item.original_filename||'')+'">'+h(item.original_filename)+'</a></div>').join(''):'<a target="_blank" rel="noopener" href="/file-preview/assignment/'+s.submission_id+'?filename='+encodeURIComponent(s.original_filename||'')+'">'+h(s.original_filename)+'</a>'):(s.status==='rejected'?'<span class="danger">저장 안 됨</span>':'<span class="muted">-</span>');
  const check=confirmable&&!isAbsent?'<input type="checkbox" '+(checked?'checked disabled':'')+' onchange="toggleCheck('+s.submission_id+',this.checked)">':'<span class="muted">-</span>';
  const absent='<input type="checkbox" '+(isAbsent?'checked':'')+' onchange="toggleRunAbsent('+s.run_student_id+',this.checked)">';
  return '<tr class="'+(isAbsent?'absent-row':'')+'"><td>'+absent+'</td><td>'+check+'</td><td>'+statusHtml(s)+'</td><td>'+(s.submitted_at||'-')+'</td><td>'+s.class_num+'</td><td>'+s.seat_num+'</td><td>'+s.name+'</td><td>'+(s.ip_address||'-')+'</td><td>'+file+'</td></tr>';
@@ -736,9 +802,10 @@ teacherApp.get('/', async (req, res) => {
 <main>${studentLink}<div id="summary" class="summary"></div><div id="submissions"></div></main>
 <script>
 async function j(url,opt){const r=await fetch(url,opt);if(!r.ok)throw new Error(await r.text());return r.json();}
+function h(value){return String(value??'').replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));}
 function renderSummary(rows){const total=rows.length;const absent=rows.filter(s=>Number(s.is_absent||0)===1).length;const present=total-absent;const submitted=rows.filter(s=>Number(s.is_absent||0)!==1&&!!s.submission_id).length;const checked=rows.filter(s=>Number(s.is_absent||0)!==1&&(s.status==='accepted'||s.status==='no_file')&&Number(s.teacher_checked||0)===1).length;const done=present>0&&checked>=present;summary.className='summary '+(done?'summary-done':'');summary.innerHTML='<span>총원 '+total+'명</span><span>결시 '+absent+'명</span><span>실시 '+present+'명</span><span>제출 '+submitted+'명</span><span>확인 '+checked+'명</span>'+(done?'<strong class="complete-badge">전원 확인 완료</strong>':'');}
 function statusHtml(s){if(!s.submission_id)return Number(s.separate_artifact_count||0)>0?'<span class="ok">별도 산출물 있음</span>':'<span class="muted">미제출</span>';if(s.status==='rejected')return '<span class="danger">제출 실패</span><div class="muted">'+(s.reject_reason||'사유 없음')+'</div>';if(s.status==='no_file')return '<span class="muted">파일 미제출</span>';return '<span class="ok">'+(Number(s.accepted_count||0)>1?'새로 제출됨':'제출됨')+'</span>';}
-function rowHtml(s){const isAbsent=Number(s.is_absent||0)===1;const submitted=!!s.submission_id;const checked=Number(s.teacher_checked||0)===1;const confirmable=submitted&&(s.status==='accepted'||s.status==='no_file');const file=s.status==='accepted'?'<a target="_blank" rel="noopener" href="/file-preview/assignment/'+s.submission_id+'?filename='+encodeURIComponent(s.original_filename||'')+'">'+s.original_filename+'</a>':(s.status==='rejected'?'<span class="danger">저장 안 됨</span>':'<span class="muted">-</span>');const check=confirmable&&!isAbsent?'<input type="checkbox" '+(checked?'checked disabled':'')+' onchange="toggleCheck('+s.submission_id+',this.checked)">':'<span class="muted">-</span>';const absent='<input type="checkbox" '+(isAbsent?'checked':'')+' onchange="toggleAbsent('+s.run_student_id+',this.checked)">';return '<tr class="'+(isAbsent?'absent-row':'')+'"><td>'+absent+'</td><td>'+check+'</td><td>'+statusHtml(s)+'</td><td>'+(s.submitted_at||'-')+'</td><td>'+s.class_num+'</td><td>'+s.seat_num+'</td><td>'+s.name+'</td><td>'+(s.ip_address||'-')+'</td><td>'+file+'</td></tr>';}
+function rowHtml(s){const isAbsent=Number(s.is_absent||0)===1;const submitted=!!s.submission_id;const checked=Number(s.teacher_checked||0)===1;const confirmable=submitted&&(s.status==='accepted'||s.status==='no_file');const file=s.status==='accepted'?(Array.isArray(s.active_files)&&s.active_files.length?s.active_files.map(item=>'<div><span class="muted">'+h(item.submission_slot_name||'파일')+'</span> <a target="_blank" rel="noopener" href="/file-preview/assignment/'+item.id+'?filename='+encodeURIComponent(item.original_filename||'')+'">'+h(item.original_filename)+'</a></div>').join(''):'<a target="_blank" rel="noopener" href="/file-preview/assignment/'+s.submission_id+'?filename='+encodeURIComponent(s.original_filename||'')+'">'+h(s.original_filename)+'</a>'):(s.status==='rejected'?'<span class="danger">저장 안 됨</span>':'<span class="muted">-</span>');const check=confirmable&&!isAbsent?'<input type="checkbox" '+(checked?'checked disabled':'')+' onchange="toggleCheck('+s.submission_id+',this.checked)">':'<span class="muted">-</span>';const absent='<input type="checkbox" '+(isAbsent?'checked':'')+' onchange="toggleAbsent('+s.run_student_id+',this.checked)">';return '<tr class="'+(isAbsent?'absent-row':'')+'"><td>'+absent+'</td><td>'+check+'</td><td>'+statusHtml(s)+'</td><td>'+(s.submitted_at||'-')+'</td><td>'+s.class_num+'</td><td>'+s.seat_num+'</td><td>'+h(s.name)+'</td><td>'+(s.ip_address||'-')+'</td><td>'+file+'</td></tr>';}
 async function load(){const rows=await j('/api/submissions?sort='+sort.value);renderSummary(rows);submissions.innerHTML='<table><thead><tr><th>결시 여부</th><th>제출 확인</th><th>제출 상태</th><th>제출 시간</th><th>반</th><th>번호</th><th>이름</th><th>IP</th><th>파일</th></tr></thead><tbody>'+rows.map(rowHtml).join('')+'</tbody></table>'}
 async function toggleCheck(id,checked){await j('/api/submissions/'+id+'/check',{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({checked})});await load();}
 async function toggleAbsent(id,absent){await j('/api/students/'+id+'/absent',{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({absent})});await load();}
@@ -862,36 +929,15 @@ teacherApp.patch('/api/students/:id/absent', requireTeacherAuth, async (req, res
 type ExistingArtifactFile = {
   id: number;
   filepath: string;
-  source: 'submission' | 'artifact';
+  source: 'artifact';
   assessmentStudentId: number;
 };
 
-async function existingArtifactFilesForStudents(configId: number, assignmentClassId: number, students: any[]) {
+async function existingArtifactFilesForStudents(configId: number, students: any[]) {
   const config = await queryOne<{ domain_name: string }>('SELECT domain_name FROM assignment_configs WHERE id=?', [configId]);
   if (!config) return { files: [] as ExistingArtifactFile[], affectedStudentIds: new Set<number>() };
 
-  const byAssignmentStudentId = new Map(students.map(student => [Number(student.id), student]));
-  const byIdentity = new Map(students.map(student => [`${Number(student.student_num)}\u0000${student.name}`, student]));
-  const submissions = await queryAll<any>(
-    `SELECT sub.id, sub.filepath, sub.assignment_student_id, sub.student_num, sub.name
-     FROM assignment_submissions sub
-     JOIN assignment_runs run ON run.id=sub.run_id
-     WHERE run.config_id=? AND run.assignment_class_id=? AND sub.status='accepted'`,
-    [configId, assignmentClassId]
-  );
   const files: ExistingArtifactFile[] = [];
-  for (const submission of submissions) {
-    const student = byAssignmentStudentId.get(Number(submission.assignment_student_id))
-      || byIdentity.get(`${Number(submission.student_num)}\u0000${submission.name}`);
-    if (student) {
-      files.push({
-        id: Number(submission.id),
-        filepath: String(submission.filepath || ''),
-        source: 'submission',
-        assessmentStudentId: Number(student.assessment_student_id),
-      });
-    }
-  }
 
   const assessmentStudentIds = [...new Set(students.map(student => Number(student.assessment_student_id)).filter(Boolean))];
   if (assessmentStudentIds.length) {
@@ -932,7 +978,7 @@ app.post('/api/admin/runs', requireLocal, async (req, res) => {
     [assignmentClassId, ...requestedStudentIds]
   );
   if (!students.length) return res.status(400).json({ error: '수행 대상 학생이 없습니다.' });
-  const existing = await existingArtifactFilesForStudents(configId, assignmentClassId, students);
+  const existing = await existingArtifactFilesForStudents(configId, students);
   if (existing.files.length && req.body?.replaceExistingArtifacts !== true) {
     return res.status(409).json({
       conflict: 'existing_artifacts',
@@ -959,14 +1005,7 @@ app.post('/api/admin/runs', requireLocal, async (req, res) => {
     const viewer = runCode();
     let runId = 0;
     await transaction(async () => {
-      const submissionIds = existing.files.filter(file => file.source === 'submission').map(file => file.id);
       const artifactIds = existing.files.filter(file => file.source === 'artifact').map(file => file.id);
-      if (submissionIds.length) {
-        await execute(
-          `DELETE FROM assignment_submissions WHERE id IN (${submissionIds.map(() => '?').join(',')})`,
-          submissionIds
-        );
-      }
       if (artifactIds.length) {
         await execute(
           `DELETE FROM assignment_artifacts WHERE id IN (${artifactIds.map(() => '?').join(',')})`,
@@ -976,8 +1015,11 @@ app.post('/api/admin/runs', requireLocal, async (req, res) => {
       await execute('UPDATE assignment_runs SET is_open=0, ended_at=datetime(\'now\', \'localtime\') WHERE is_open=1');
       await execute('UPDATE assignment_configs SET is_open=0');
       const r = await execute(
-        'INSERT INTO assignment_runs(config_id, assignment_class_id, share_code, viewer_code, is_open, guide_md_snapshot) VALUES(?,?,?,?,1,?)',
-        [configId, assignmentClassId, share, viewer, snapshot.guideMd]
+        `INSERT INTO assignment_runs(
+           config_id, assignment_class_id, share_code, viewer_code, is_open,
+           guide_md_snapshot, submission_rules_snapshot
+         ) VALUES(?,?,?,?,1,?,?)`,
+        [configId, assignmentClassId, share, viewer, snapshot.guideMd, snapshot.submissionRules]
       );
       runId = Number(r.lastInsertRowid);
       for (const resource of snapshot.resources) {
@@ -1228,28 +1270,51 @@ async function handleSubmission(req: any, res: any, run: any) {
     return res.status(400).json({ error: '파일이 없습니다.' });
   }
   const rules = submissionRules(run.allowed_extensions, Number(run.max_file_size_mb || 50), Number(run.max_files || 1));
+  const submittedSlotIds = (Array.isArray(req.body.submissionSlotIds)
+    ? req.body.submissionSlotIds
+    : [req.body.submissionSlotIds])
+    .map((value: unknown) => String(value || '').trim());
+  if (submittedSlotIds.length !== files.length) {
+    const reason = '제출 항목 정보와 파일이 일치하지 않습니다. 파일을 다시 선택해 주세요.';
+    await recordRejectedSubmission(req, run, student, studentNum, classNum, seatNum, name, files[0], reason);
+    cleanupTempFiles(files);
+    return res.status(400).json({ error: reason });
+  }
   if (!rules.length && files.length > Number(run.max_files || 1)) {
     const reason = `최대 ${run.max_files}개까지 제출할 수 있습니다.`;
     await recordRejectedSubmission(req, run, student, studentNum, classNum, seatNum, name, files[0], reason);
     cleanupTempFiles(files);
     return res.status(400).json({ error: reason });
   }
-  const ruleByExtension = new Map(rules.map(rule => [rule.extension, rule]));
+  const effectiveRules = rules.length ? rules : [{
+    id: 'default',
+    name: '파일',
+    extension: '',
+    max_file_size_mb: Number(run.max_file_size_mb || 50),
+    max_files: Number(run.max_files || 1),
+  }];
+  const ruleById = new Map(effectiveRules.map(rule => [rule.id, rule]));
   const counts = new Map<string, number>();
-  for (const file of files) {
+  for (const [index, file] of files.entries()) {
     const original = decodeUploadFilename(file.originalname);
     const ext = path.extname(original).toLowerCase().replace(/^\./, '');
-    const rule = rules.length ? ruleByExtension.get(ext) : { extension: ext, max_file_size_mb: Number(run.max_file_size_mb || 50), max_files: Number(run.max_files || 1) };
+    const rule = ruleById.get(submittedSlotIds[index]);
     if (!rule) {
-      const reason = ext ? `허용되지 않은 확장자입니다: .${ext}` : '확장자가 없는 파일은 제출할 수 없습니다.';
+      const reason = '설정에 없는 제출 항목입니다. 화면을 새로고침한 뒤 다시 제출해 주세요.';
       await recordRejectedSubmission(req, run, student, studentNum, classNum, seatNum, name, file, reason);
       cleanupTempFiles(files);
       return res.status(400).json({ error: reason });
     }
-    const count = (counts.get(ext) || 0) + 1;
-    counts.set(ext, count);
+    if (rule.extension && ext !== rule.extension) {
+      const reason = `${rule.name} 항목에는 .${rule.extension} 파일을 제출해야 합니다.`;
+      await recordRejectedSubmission(req, run, student, studentNum, classNum, seatNum, name, file, reason);
+      cleanupTempFiles(files);
+      return res.status(400).json({ error: reason });
+    }
+    const count = (counts.get(rule.id) || 0) + 1;
+    counts.set(rule.id, count);
     if (count > rule.max_files) {
-      const reason = `.${ext} 파일은 최대 ${rule.max_files}개까지 제출할 수 있습니다.`;
+      const reason = `${rule.name} 항목은 최대 ${rule.max_files}개까지 제출할 수 있습니다.`;
       await recordRejectedSubmission(req, run, student, studentNum, classNum, seatNum, name, file, reason);
       cleanupTempFiles(files);
       return res.status(400).json({ error: reason });
@@ -1261,21 +1326,47 @@ async function handleSubmission(req: any, res: any, run: any) {
       return res.status(400).json({ error: reason });
     }
   }
+  if (rules.length) {
+    const existingSlots = await queryAll<{ submission_slot_id: string }>(
+      `SELECT DISTINCT submission_slot_id
+       FROM assignment_submissions
+       WHERE run_id=? AND status='accepted' AND submission_slot_id!=''
+         AND (assignment_student_id=? OR (student_num=? AND name=?))`,
+      [run.id, student.id, studentNum, name]
+    );
+    const coveredSlotIds = new Set([
+      ...existingSlots.map(row => String(row.submission_slot_id || '')),
+      ...submittedSlotIds,
+    ]);
+    const missingRules = rules.filter(rule => !coveredSlotIds.has(rule.id));
+    if (missingRules.length) {
+      const reason = `아직 제출하지 않은 항목이 있습니다: ${missingRules.map(rule => rule.name).join(', ')}`;
+      await recordRejectedSubmission(req, run, student, studentNum, classNum, seatNum, name, files[0], reason);
+      cleanupTempFiles(files);
+      return res.status(400).json({ error: reason });
+    }
+  }
   const baseDir = path.join(SUBMISSIONS_DIR, String(run.year), String(run.semester), String(run.grade), safeSegment(run.subject), safeSegment(run.room), safeSegment(run.domain_name));
   fs.mkdirSync(baseDir, { recursive: true });
+  const submissionBatchId = `${Date.now()}-${crypto.randomBytes(8).toString('hex')}`;
   for (const [index, file] of files.entries()) {
     const original = decodeUploadFilename(file.originalname);
     const ext = path.extname(original).toLowerCase();
-    const stored = `${studentNum}_${safeSegment(name)}${files.length > 1 ? `_${index + 1}` : ''}${ext}`;
+    const rule = ruleById.get(submittedSlotIds[index])!;
+    const stored = `${studentNum}_${safeSegment(name)}_${safeSegment(rule.name)}${files.length > 1 ? `_${index + 1}` : ''}${ext}`;
     const finalPath = path.join(baseDir, `${Date.now()}_${stored}`);
     fs.renameSync(file.path, finalPath);
     const inserted = await execute(
       `INSERT INTO assignment_submissions(
-         run_id, assignment_student_id, student_num, class_num, seat_num, name, ip_address,
+         run_id, assignment_student_id, student_num, class_num, seat_num, name,
+         submission_slot_id, submission_slot_name, submission_batch_id, ip_address,
          original_filename, stored_filename, filepath, mime_type, size, status, reject_reason,
          user_agent, teacher_checked, teacher_checked_at
-       ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,'')`,
-      [run.id, student?.id || null, studentNum, classNum, seatNum, name, clientIp(req), original, stored, toStoredPath(finalPath), file.mimetype || '', file.size || 0, 'accepted', '', String(req.headers['user-agent'] || '')]
+       ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,'')`,
+      [run.id, student?.id || null, studentNum, classNum, seatNum, name,
+        rule.id, rule.name, submissionBatchId, clientIp(req), original, stored,
+        toStoredPath(finalPath), file.mimetype || '', file.size || 0, 'accepted', '',
+        String(req.headers['user-agent'] || '')]
     );
     writeAssignmentLog('submission_created', {
       run_id: run.id,
@@ -1290,6 +1381,8 @@ async function handleSubmission(req: any, res: any, run: any) {
       class_num: classNum,
       seat_num: seatNum,
       name,
+      submission_slot_id: rule.id,
+      submission_slot_name: rule.name,
       ip_address: clientIp(req),
       original_filename: original,
       stored_filename: stored,
@@ -1328,16 +1421,41 @@ teacherApp.get('/api/submissions', requireTeacherAuth, async (req, res) => {
 
 async function checkSubmission(req: any, res: any) {
   const checked = req.body?.checked ? 1 : 0;
-  const existing = await queryOne<any>('SELECT teacher_checked, status FROM assignment_submissions WHERE id=?', [req.params.id]);
+  const existing = await queryOne<any>(
+    `SELECT id, run_id, assignment_student_id, student_num, name, teacher_checked, status
+     FROM assignment_submissions WHERE id=?`,
+    [req.params.id]
+  );
   if (!existing) return res.status(404).json({ error: '제출 정보를 찾을 수 없습니다.' });
   if (existing.status === 'rejected') return res.status(400).json({ error: '실패한 제출은 확인할 수 없습니다.' });
-  if (Number(existing.teacher_checked || 0) === 1) return res.status(409).json({ error: '이미 확인 완료된 제출은 수정할 수 없습니다.' });
   if (!checked) return res.status(400).json({ error: '확인 해제는 할 수 없습니다.' });
+  let ids = [Number(existing.id)];
+  if (existing.status === 'accepted') {
+    const active = await queryAll<{ id: number }>(
+      `SELECT sub.id
+       FROM assignment_submissions sub
+       WHERE sub.run_id=? AND sub.status='accepted' AND sub.submission_slot_id!=''
+         AND (sub.assignment_student_id=? OR (sub.student_num=? AND sub.name=?))
+         AND NOT EXISTS (
+           SELECT 1 FROM assignment_submissions newer
+           WHERE newer.run_id=sub.run_id AND newer.status='accepted'
+             AND newer.submission_slot_id=sub.submission_slot_id
+             AND (newer.assignment_student_id=sub.assignment_student_id
+               OR (newer.student_num=sub.student_num AND newer.name=sub.name))
+             AND newer.submission_batch_id!=sub.submission_batch_id
+             AND (newer.submitted_at>sub.submitted_at
+               OR (newer.submitted_at=sub.submitted_at AND newer.id>sub.id))
+         )`,
+      [existing.run_id, existing.assignment_student_id, existing.student_num, existing.name]
+    );
+    ids = active.map(row => Number(row.id));
+  }
+  if (!ids.length) return res.status(404).json({ error: '현재 제출 파일을 찾을 수 없습니다.' });
   await execute(
     `UPDATE assignment_submissions
-     SET teacher_checked=?, teacher_checked_at=CASE WHEN ?=1 THEN datetime('now', 'localtime') ELSE '' END
-     WHERE id=?`,
-    [checked, checked, req.params.id]
+     SET teacher_checked=1, teacher_checked_at=datetime('now', 'localtime')
+     WHERE id IN (${ids.map(() => '?').join(',')})`,
+    ids
   );
   const sub = await queryOne<any>(
     `SELECT sub.id AS submission_id, sub.run_id, sub.student_num, sub.class_num, sub.seat_num, sub.name,

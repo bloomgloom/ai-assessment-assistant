@@ -77,6 +77,7 @@ export async function initDb() {
       share_code TEXT NOT NULL UNIQUE,
       viewer_code TEXT NOT NULL UNIQUE,
       is_open INTEGER NOT NULL DEFAULT 1,
+      submission_rules_snapshot TEXT NOT NULL DEFAULT '',
       started_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
       ended_at TEXT DEFAULT ''
     );
@@ -111,6 +112,9 @@ export async function initDb() {
       class_num INTEGER NOT NULL DEFAULT 0,
       seat_num INTEGER NOT NULL DEFAULT 0,
       name TEXT NOT NULL,
+      submission_slot_id TEXT NOT NULL DEFAULT '',
+      submission_slot_name TEXT NOT NULL DEFAULT '',
+      submission_batch_id TEXT NOT NULL DEFAULT '',
       ip_address TEXT NOT NULL DEFAULT '',
       original_filename TEXT NOT NULL,
       stored_filename TEXT NOT NULL,

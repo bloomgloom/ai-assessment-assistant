@@ -168,6 +168,8 @@ function serializeExtensionList(items: string[]) {
 }
 
 interface AssignmentExtensionRule {
+  id: string;
+  name: string;
   extension: string;
   max_file_size_mb: number;
   max_files: number;
@@ -178,18 +180,25 @@ function parseExtensionRules(value: string, fallbackSize = 50, fallbackFiles = 1
     const parsed = JSON.parse(value || '[]');
     if (Array.isArray(parsed)) {
       return parsed
-        .map((item) => ({
-          extension: String(item.extension || item.ext || '').trim().replace(/^\./, '').toLowerCase(),
-          max_file_size_mb: Math.max(1, Number(item.max_file_size_mb || item.maxFileSizeMb || fallbackSize)),
-          max_files: Math.max(1, Number(item.max_files || item.maxFiles || fallbackFiles)),
-        }))
-        .filter(item => item.extension)
-        .filter((item, index, arr) => arr.findIndex(other => other.extension === item.extension) === index);
+        .map((item, index) => {
+          const extension = String(item.extension || item.ext || '').trim().replace(/^\./, '').toLowerCase();
+          return {
+            id: String(item.id || item.slot_id || `slot-${index + 1}-${extension}`),
+            name: String(item.name || item.content || item.label || extension).trim(),
+            extension,
+            max_file_size_mb: Math.max(1, Number(item.max_file_size_mb || item.maxFileSizeMb || fallbackSize)),
+            max_files: Math.max(1, Number(item.max_files || item.maxFiles || fallbackFiles)),
+          };
+        })
+        .filter(item => item.id && item.name && item.extension)
+        .filter((item, index, arr) => arr.findIndex(other => other.id === item.id) === index);
     }
   } catch {
     // Legacy newline/comma separated extension list.
   }
-  return parseExtensionList(value).map(extension => ({
+  return parseExtensionList(value).map((extension, index) => ({
+    id: `slot-${index + 1}-${extension}`,
+    name: extension,
     extension,
     max_file_size_mb: Math.max(1, Number(fallbackSize) || 50),
     max_files: Math.max(1, Number(fallbackFiles) || 1),
@@ -200,12 +209,14 @@ function serializeExtensionRules(items: AssignmentExtensionRule[]) {
   return JSON.stringify(
     items
       .map(item => ({
+        id: item.id.trim(),
+        name: item.name.trim(),
         extension: item.extension.trim().replace(/^\./, '').toLowerCase(),
         max_file_size_mb: Math.max(1, Number(item.max_file_size_mb) || 50),
         max_files: Math.max(1, Number(item.max_files) || 1),
       }))
-      .filter(item => item.extension)
-      .filter((item, index, arr) => arr.findIndex(other => other.extension === item.extension) === index)
+      .filter(item => item.id && item.name && item.extension)
+      .filter((item, index, arr) => arr.findIndex(other => other.id === item.id) === index)
   );
 }
 
@@ -321,6 +332,7 @@ export function DomainContent({
 }: DomainContentProps) {
   const [guideEditorOpen, setGuideEditorOpen] = useState(false);
   const [guideOriginal, setGuideOriginal] = useState('');
+  const [contentDraft, setContentDraft] = useState('');
   const [extensionDraft, setExtensionDraft] = useState('');
   const [viewingResource, setViewingResource] = useState<AssignmentResource | null>(null);
   const [resourceLinkDraft, setResourceLinkDraft] = useState('');
@@ -417,12 +429,14 @@ export function DomainContent({
   const updateAssignmentExtensionRules = (rules: AssignmentExtensionRule[]) => {
     const normalized = rules
       .map(item => ({
+        id: item.id,
+        name: item.name.trim(),
         extension: item.extension.trim().replace(/^\./, '').toLowerCase(),
         max_file_size_mb: Math.max(1, Number(item.max_file_size_mb) || 50),
         max_files: Math.max(1, Number(item.max_files) || 1),
       }))
-      .filter(item => item.extension)
-      .filter((item, index, arr) => arr.findIndex(other => other.extension === item.extension) === index);
+      .filter(item => item.id && item.name && item.extension)
+      .filter((item, index, arr) => arr.findIndex(other => other.id === item.id) === index);
     updateAssignmentConfig({
       allowed_extensions: serializeExtensionRules(normalized),
       max_file_size_mb: Math.max(1, ...normalized.map(item => item.max_file_size_mb), 50),
@@ -1138,14 +1152,25 @@ export function DomainContent({
                     <div className="rounded-md border border-gray-300 bg-white p-2">
                       <div className="space-y-1">
                         {assignmentExtensionRules.length > 0 && (
-                          <div className="grid grid-cols-3 px-2 pb-1 text-[11px] font-medium text-gray-400">
+                          <div className="grid grid-cols-[minmax(100px,1.5fr)_80px_90px_70px] gap-1 px-2 pb-1 text-[11px] font-medium text-gray-400">
+                            <span className="text-center">내용</span>
                             <span className="text-center">확장자</span>
                             <span className="text-center">최대 용량</span>
                             <span className="text-center">파일 수</span>
                           </div>
                         )}
                         {assignmentExtensionRules.map((rule, index) => (
-                          <div key={rule.extension} className="grid grid-cols-3 items-center gap-1 rounded border border-gray-200 bg-gray-50 px-2 py-1.5">
+                          <div key={rule.id} className="grid grid-cols-[minmax(100px,1.5fr)_80px_90px_70px] items-center gap-1 rounded border border-gray-200 bg-gray-50 px-2 py-1.5">
+                            <input
+                              className="input h-7 min-w-0 px-1.5 py-0 text-xs"
+                              defaultValue={rule.name}
+                              onBlur={(e) => {
+                                const next = [...assignmentExtensionRules];
+                                next[index] = { ...rule, name: e.target.value.trim() || rule.extension };
+                                updateAssignmentExtensionRules(next);
+                              }}
+                              placeholder="제출 내용"
+                            />
                             <div className="flex justify-center">
                               <div className="relative group">
                                 <span className={`px-2 py-0.5 text-[11px] font-bold rounded border whitespace-nowrap ${extBadgeClass(rule.extension)}`}>
@@ -1154,9 +1179,7 @@ export function DomainContent({
                                 <button
                                   type="button"
                                   className="absolute -top-1.5 -right-1.5 hidden group-hover:flex items-center justify-center w-3.5 h-3.5 rounded-full bg-red-500 text-white"
-                                  onClick={() => updateAssignmentConfig({
-                                    allowed_extensions: serializeExtensionRules(assignmentExtensionRules.filter((_, ruleIndex) => ruleIndex !== index)),
-                                  })}
+                                  onClick={() => updateAssignmentExtensionRules(assignmentExtensionRules.filter((_, ruleIndex) => ruleIndex !== index))}
                                   title="삭제"
                                 >
                                   <X size={8} />
@@ -1195,11 +1218,17 @@ export function DomainContent({
                         ))}
                         {assignmentExtensionRules.length === 0 && (
                           <div className="rounded border border-dashed border-gray-200 px-2 py-3 text-xs text-gray-400">
-                            확장자를 추가하면 학생 화면에 확장자별 업로드 버튼이 표시됩니다. 비워두면 모든 확장자를 50MB, 1개까지 허용합니다.
+                            제출 내용과 확장자를 추가하면 학생 화면에 항목별 업로드 버튼이 표시됩니다. 같은 확장자도 서로 다른 내용으로 여러 번 추가할 수 있습니다.
                           </div>
                         )}
                       </div>
-                      <div className="mt-2 flex gap-2">
+                      <div className="mt-2 grid grid-cols-[minmax(0,1fr)_90px_32px] gap-2">
+                        <input
+                          className="input h-8 px-2 py-0 text-xs"
+                          value={contentDraft}
+                          onChange={(e) => setContentDraft(e.target.value)}
+                          placeholder="내용 (예: 원본 데이터)"
+                        />
                         <input
                           className="input h-8 px-2 py-0 text-xs"
                           value={extensionDraft}
@@ -1208,8 +1237,10 @@ export function DomainContent({
                             if (e.key !== 'Enter') return;
                             e.preventDefault();
                             const next = extensionDraft.trim().replace(/^\./, '').toLowerCase();
-                            if (!next) return;
-                            updateAssignmentExtensionRules([...assignmentExtensionRules, { extension: next, max_file_size_mb: 50, max_files: 1 }]);
+                            const name = contentDraft.trim();
+                            if (!name || !next) return;
+                            updateAssignmentExtensionRules([...assignmentExtensionRules, { id: crypto.randomUUID(), name, extension: next, max_file_size_mb: 50, max_files: 1 }]);
+                            setContentDraft('');
                             setExtensionDraft('');
                           }}
                           placeholder="pdf"
@@ -1219,8 +1250,10 @@ export function DomainContent({
                           className="btn-secondary h-8 py-0 text-xs"
                           onClick={() => {
                             const next = extensionDraft.trim().replace(/^\./, '').toLowerCase();
-                            if (!next) return;
-                            updateAssignmentExtensionRules([...assignmentExtensionRules, { extension: next, max_file_size_mb: 50, max_files: 1 }]);
+                            const name = contentDraft.trim();
+                            if (!name || !next) return;
+                            updateAssignmentExtensionRules([...assignmentExtensionRules, { id: crypto.randomUUID(), name, extension: next, max_file_size_mb: 50, max_files: 1 }]);
+                            setContentDraft('');
                             setExtensionDraft('');
                           }}
                         >
@@ -1321,7 +1354,7 @@ export function DomainContent({
                       <div className="overflow-hidden rounded-md border border-gray-200">
                         <table className="w-full text-xs">
                           <thead className="bg-gray-50 text-gray-500">
-                            <tr><th className="px-3 py-2 text-left">학생</th><th className="px-3 py-2 text-left">상태</th><th className="px-3 py-2 text-left">최근 제출</th><th className="px-3 py-2 text-left">파일</th><th className="px-3 py-2 text-center">제출 횟수</th><th className="px-3 py-2 text-center">확인</th></tr>
+                            <tr><th className="px-3 py-2 text-left">학생</th><th className="px-3 py-2 text-left">상태</th><th className="px-3 py-2 text-left">최근 제출</th><th className="px-3 py-2 text-left">파일</th><th className="px-3 py-2 text-center">현재 파일</th><th className="px-3 py-2 text-center">확인</th></tr>
                           </thead>
                           <tbody className="divide-y divide-gray-100">
                             {selectedRunDetail.students.map(student => {
@@ -1333,8 +1366,15 @@ export function DomainContent({
                                   <td className="px-3 py-2 whitespace-nowrap">{student.class_num}반 {student.seat_num}번 {student.name}</td>
                                   <td className="px-3 py-2 whitespace-nowrap">{Number(student.is_absent) ? <span className="text-red-500">결시</span> : runSubmissionLabel(latest)}</td>
                                   <td className="px-3 py-2 whitespace-nowrap text-gray-500">{latest ? formatRunTime(latest.submitted_at) : '-'}</td>
-                                  <td className="max-w-56 truncate px-3 py-2 text-gray-600" title={latest?.original_filename || ''}>{latest?.status === 'accepted' ? latest.original_filename : '-'}</td>
-                                  <td className="px-3 py-2 text-center">{submissions.length}{acceptedFiles > 1 ? ` (파일 ${acceptedFiles})` : ''}</td>
+                                  <td className="max-w-72 px-3 py-2 text-gray-600">
+                                    {acceptedFiles > 0 ? submissions.filter(item => item.status === 'accepted').map(item => (
+                                      <div key={item.id} className="truncate" title={`${item.submission_slot_name}: ${item.original_filename}`}>
+                                        <span className="text-gray-400">{item.submission_slot_name || '파일'}:</span>{' '}
+                                        {item.original_filename}
+                                      </div>
+                                    )) : '-'}
+                                  </td>
+                                  <td className="px-3 py-2 text-center">{acceptedFiles}</td>
                                   <td className="px-3 py-2 text-center">{latest && Number(latest.teacher_checked) ? '확인' : '-'}</td>
                                 </tr>
                               );
@@ -1345,18 +1385,19 @@ export function DomainContent({
                     </div>
 
                     <div>
-                      <h4 className="mb-2 text-xs font-semibold text-gray-700">전체 제출 이력</h4>
+                      <h4 className="mb-2 text-xs font-semibold text-gray-700">현재 제출 파일</h4>
                       {selectedRunDetail.submissions.length > 0 ? (
                         <div className="overflow-hidden rounded-md border border-gray-200">
                           <table className="w-full text-xs">
                             <thead className="bg-gray-50 text-gray-500">
-                              <tr><th className="px-3 py-2 text-left">시간</th><th className="px-3 py-2 text-left">학생</th><th className="px-3 py-2 text-left">결과</th><th className="px-3 py-2 text-left">파일</th><th className="px-3 py-2 text-left">IP</th><th className="px-3 py-2 text-left">비고</th></tr>
+                              <tr><th className="px-3 py-2 text-left">시간</th><th className="px-3 py-2 text-left">학생</th><th className="px-3 py-2 text-left">내용</th><th className="px-3 py-2 text-left">결과</th><th className="px-3 py-2 text-left">파일</th><th className="px-3 py-2 text-left">IP</th><th className="px-3 py-2 text-left">비고</th></tr>
                             </thead>
                             <tbody className="divide-y divide-gray-100">
                               {selectedRunDetail.submissions.map(submission => (
                                 <tr key={submission.id}>
                                   <td className="px-3 py-2 whitespace-nowrap text-gray-500">{formatRunTime(submission.submitted_at)}</td>
                                   <td className="px-3 py-2 whitespace-nowrap">{submission.class_num}반 {submission.seat_num}번 {submission.name}</td>
+                                  <td className="px-3 py-2 whitespace-nowrap text-gray-500">{submission.submission_slot_name || '-'}</td>
                                   <td className="px-3 py-2 whitespace-nowrap">{runSubmissionLabel(submission)}</td>
                                   <td className="max-w-56 truncate px-3 py-2" title={submission.original_filename}>{submission.status === 'accepted' ? submission.original_filename : '-'}</td>
                                   <td className="px-3 py-2 whitespace-nowrap text-gray-500">{submission.ip_address || '-'}</td>
@@ -1367,7 +1408,7 @@ export function DomainContent({
                           </table>
                         </div>
                       ) : (
-                        <div className="rounded-md border border-dashed border-gray-200 py-6 text-center text-xs text-gray-400">제출 이력이 없습니다.</div>
+                        <div className="rounded-md border border-dashed border-gray-200 py-6 text-center text-xs text-gray-400">현재 제출 파일이 없습니다.</div>
                       )}
                     </div>
                   </div>

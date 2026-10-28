@@ -84,6 +84,8 @@ export interface AssignmentRunSubmission {
   seat_num: number;
   name: string;
   ip_address: string;
+  submission_slot_id: string;
+  submission_slot_name: string;
   original_filename: string;
   size: number;
   status: 'accepted' | 'no_file' | 'rejected' | string;
