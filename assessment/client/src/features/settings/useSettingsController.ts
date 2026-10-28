@@ -116,6 +116,7 @@ export function useSettingsController() {
     pdfRedactionTopCm: 0,
     aiEnabled: false,
     assignmentTeacherPasswordSet: false,
+    assignmentUploadApprovalMb: 50,
   });
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
@@ -151,6 +152,7 @@ export function useSettingsController() {
         pdfRedactionTopCm: Math.max(0, Math.min(30, Number(data.pdfRedactionTopCm) || 0)),
         aiEnabled: data.aiEnabled === true,
         assignmentTeacherPasswordSet: data.assignmentTeacherPasswordSet === true,
+        assignmentUploadApprovalMb: Math.max(1, Number(data.assignmentUploadApprovalMb) || 50),
       });
     });
   }, []);
@@ -593,6 +595,13 @@ export function useSettingsController() {
     return true;
   };
 
+  const saveAssignmentUploadApprovalMb = async (value: number) => {
+    const normalized = Math.max(1, Math.floor(Number(value) || 50));
+    await settingsApi.update({ assignmentUploadApprovalMb: normalized });
+    setSettings((s) => ({ ...s, assignmentUploadApprovalMb: normalized }));
+    return true;
+  };
+
   const isOllama = settings.provider === 'ollama';
   const isOpenAICompatible = settings.provider === 'openai-compatible';
   const needsKey = settings.provider !== 'ollama';
@@ -627,6 +636,7 @@ export function useSettingsController() {
     handleRestore,
     saveAssignmentTeacherPassword,
     clearAssignmentTeacherPassword,
+    saveAssignmentUploadApprovalMb,
     isOllama,
     isOpenAICompatible,
     needsKey,

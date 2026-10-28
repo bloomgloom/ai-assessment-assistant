@@ -28,7 +28,7 @@ const mdRenderer = new MarkdownIt({
   typographer: false
 });
 
-const upload = multer({ dest: TEMP_DIR, limits: { fileSize: 200 * 1024 * 1024 } });
+const upload = multer({ dest: TEMP_DIR, limits: { fileSize: 5 * 1024 * 1024 * 1024 } });
 
 app.use(cors());
 app.use(express.json());
@@ -173,6 +173,14 @@ async function getTeacherPasswordHash() {
   return row?.value || '';
 }
 
+async function uploadApprovalThresholdMb() {
+  const row = await queryOne<{ value: string }>(
+    'SELECT value FROM assignment_settings WHERE key=?',
+    ['submission_upload_approval_mb']
+  );
+  return Math.max(1, Number(row?.value) || 50);
+}
+
 function parseCookies(req: any) {
   return Object.fromEntries(
     String(req.headers.cookie || '')
@@ -240,8 +248,8 @@ function submissionRules(value: string, fallbackSize = 50, fallbackFiles = 1): S
             name: String(item.name || item.content || item.label || extension).trim(),
             extension,
             required: item.required !== false && item.required !== 0,
-            max_file_size_mb: Math.max(1, Number(item.max_file_size_mb || item.maxFileSizeMb || fallbackSize)),
-            max_files: Math.max(1, Number(item.max_files || item.maxFiles || fallbackFiles)),
+            max_file_size_mb: Math.max(1, Number(fallbackSize) || 50),
+            max_files: 1,
           };
         })
         .filter(item => item.id && item.name && item.extension)
@@ -256,12 +264,12 @@ function submissionRules(value: string, fallbackSize = 50, fallbackFiles = 1): S
     extension,
     required: true,
     max_file_size_mb: Math.max(1, Number(fallbackSize) || 50),
-    max_files: Math.max(1, Number(fallbackFiles) || 1),
+    max_files: 1,
   }));
 }
 
 function extensionLabel(rule: SubmissionRule) {
-  return `${rule.name} / ${rule.required ? '필수' : '선택'} / ${rule.extension.toUpperCase()} / 최대 ${rule.max_file_size_mb}MB / ${rule.max_files}개`;
+  return `${rule.name} / ${rule.required ? '필수' : '선택'} / ${rule.extension.toUpperCase()}`;
 }
 
 function page(title: string, body: string) {
@@ -471,7 +479,8 @@ async function renderStudentPage(run: any, submitPath: string, res: any) {
     return `<section class="card"><h2>${escapeHtml(resource.filename)}</h2><div class="guide">${markdown(content)}</div></section>`;
   }).join('');
   const rules = submissionRules(run.allowed_extensions, Number(run.max_file_size_mb || 50), Number(run.max_files || 1));
-  const uploadRules = rules.length ? rules : [{ id: 'default', name: '파일', extension: '', required: true, max_file_size_mb: Number(run.max_file_size_mb || 50), max_files: Number(run.max_files || 1) }];
+  const uploadRules = rules.length ? rules : [{ id: 'default', name: '파일', extension: '', required: true, max_file_size_mb: 50, max_files: 1 }];
+  const approvalThresholdMb = await uploadApprovalThresholdMb();
   res.send(page(run.title || '수행평가 제출', `
 <header><strong>${escapeHtml(run.title || '수행평가 제출')}</strong><span class="${run.is_open ? 'ok' : 'danger'}">${run.is_open ? '제출 가능' : '제출 마감'}</span></header>
 <main class="grid student-layout">
@@ -485,19 +494,23 @@ async function renderStudentPage(run: any, submitPath: string, res: any) {
 </main>
 <script>
 const rules=${JSON.stringify(uploadRules).replace(/</g, '\\u003c')};
+const approvalThresholdBytes=${approvalThresholdMb}*1024*1024;
+const approvalRequestPath='${submitPath.replace(/\/submissions$/, '/submission-approvals')}';
 let selectedFiles=rules.map(()=>[]);
 f.elements.name.oninput=()=>{f.elements.name.value=f.elements.name.value.replace(/\\s+/g,'');};
 function label(rule){return rule.name+(rule.required?' · 필수':' · 선택')+(rule.extension?' (.'+rule.extension+')':'');}
-function limitText(rule){return (rule.extension?rule.extension:'모든 확장자')+' / 최대 '+rule.max_file_size_mb+'MB / '+rule.max_files+'개';}
+function limitText(rule){return (rule.extension?'.'+rule.extension:'모든 확장자')+' / 파일 1개';}
 function renderFiles(){uploadGroups.innerHTML=rules.map((rule,groupIndex)=>{
  const rows=selectedFiles[groupIndex].map((file,fileIndex)=>'<div class="file-row"><span>'+file.name+'</span><button type="button" onclick="removeFile('+groupIndex+','+fileIndex+')">X</button></div>').join('')||'<p class="muted">선택한 파일이 없습니다.</p>';
  const accept=rule.extension?' accept=".'+rule.extension+'"':'';
- return '<div class="upload-rule"><div class="row" style="justify-content:space-between"><div><b>'+label(rule)+'</b><p class="muted">'+limitText(rule)+'</p></div><button type="button" class="secondary" onclick="document.getElementById(\\'fileInput_'+groupIndex+'\\').click()">파일 추가</button></div><input id="fileInput_'+groupIndex+'" type="file" '+(rule.max_files>1?'multiple':'')+accept+' hidden onchange="addFiles('+groupIndex+',this)">'+rows+'</div>';
+ return '<div class="upload-rule"><div class="row" style="justify-content:space-between"><div><b>'+label(rule)+'</b><p class="muted">'+limitText(rule)+'</p></div><button type="button" class="secondary" onclick="document.getElementById(\\'fileInput_'+groupIndex+'\\').click()">파일 선택</button></div><input id="fileInput_'+groupIndex+'" type="file" '+accept+' hidden onchange="addFiles('+groupIndex+',this)">'+rows+'</div>';
 }).join('');}
-function addFiles(groupIndex,input){const rule=rules[groupIndex];for(const file of input.files||[]){if(selectedFiles[groupIndex].length<rule.max_files)selectedFiles[groupIndex].push(file);}input.value='';renderFiles();}
+function addFiles(groupIndex,input){const file=(input.files||[])[0];if(file)selectedFiles[groupIndex]=[file];input.value='';renderFiles();}
 function removeFile(groupIndex,fileIndex){selectedFiles[groupIndex].splice(fileIndex,1);renderFiles();}
 noFile.onchange=()=>{fileSection.classList.toggle('uploads-disabled',noFile.checked);};
-f.onsubmit=async(e)=>{e.preventDefault();const allFiles=selectedFiles.flat();if(!noFile.checked&&allFiles.length===0){msg.textContent='파일을 추가하거나 파일 미제출을 체크하세요.';msg.className='danger';return;}msg.textContent='제출 중...';const fd=new FormData(f);fd.delete('files');if(!noFile.checked)selectedFiles.forEach((files,groupIndex)=>files.forEach(file=>{fd.append('submissionSlotIds',rules[groupIndex].id);fd.append('files',file);}));const r=await fetch('${submitPath}',{method:'POST',body:fd});const data=await r.json().catch(()=>({error:'제출 실패'}));msg.textContent=r.ok?data.message:data.error;msg.className=r.ok?'ok':'danger';if(r.ok){f.reset();selectedFiles=rules.map(()=>[]);fileSection.classList.remove('uploads-disabled');renderFiles();}};
+async function uploadSelected(approvalToken=''){msg.textContent='제출 중...';const fd=new FormData(f);fd.delete('files');if(approvalToken)fd.set('approvalToken',approvalToken);if(!noFile.checked)selectedFiles.forEach((files,groupIndex)=>files.forEach(file=>{fd.append('submissionSlotIds',rules[groupIndex].id);fd.append('files',file);}));const r=await fetch('${submitPath}',{method:'POST',body:fd});const data=await r.json().catch(()=>({error:'제출 실패'}));msg.textContent=r.ok?data.message:data.error;msg.className=r.ok?'ok':'danger';f.classList.remove('uploads-disabled');if(r.ok){f.reset();selectedFiles=rules.map(()=>[]);fileSection.classList.remove('uploads-disabled');renderFiles();}}
+async function waitForApproval(token){for(;;){await new Promise(resolve=>setTimeout(resolve,1500));const r=await fetch('/api/public/submission-approvals/'+encodeURIComponent(token));const data=await r.json().catch(()=>({status:'error'}));if(data.status==='pending')continue;if(data.status==='approved'){await uploadSelected(token);return;}f.classList.remove('uploads-disabled');msg.textContent=data.status==='rejected'?'교사가 제출을 거부했습니다. 파일을 확인하거나 다시 선택해 주세요.':'승인 요청을 확인할 수 없습니다. 다시 제출해 주세요.';msg.className='danger';return;}}
+f.onsubmit=async(e)=>{e.preventDefault();const allFiles=selectedFiles.flat();if(!noFile.checked&&allFiles.length===0){msg.textContent='파일을 추가하거나 파일 미제출을 체크하세요.';msg.className='danger';return;}if(!noFile.checked&&allFiles.some(file=>file.size>approvalThresholdBytes)){msg.textContent='제출 확인 중입니다. 교사의 승인 또는 거부를 기다려 주세요.';msg.className='muted';f.classList.add('uploads-disabled');const files=[];selectedFiles.forEach((items,groupIndex)=>items.forEach(file=>files.push({slotId:rules[groupIndex].id,filename:file.name,size:file.size})));const r=await fetch(approvalRequestPath,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({classNum:Number(f.elements.classNum.value),seatNum:Number(f.elements.seatNum.value),name:f.elements.name.value,files})});const data=await r.json().catch(()=>({error:'승인 요청 실패'}));if(!r.ok){f.classList.remove('uploads-disabled');msg.textContent=data.error;msg.className='danger';return;}await waitForApproval(data.token);return;}await uploadSelected();};
 renderFiles();
 </script>`));
 }
@@ -584,6 +597,16 @@ async function submissionStatusForRun(runId: string | number, sort: string) {
      ORDER BY sub.submission_slot_name, sub.id`,
     [runId]
   );
+  const pendingApprovals = await queryAll<any>(
+    `SELECT id, assignment_student_id, student_num, name, files_json, created_at
+     FROM assignment_submission_approvals WHERE run_id=? AND status='pending' ORDER BY id DESC`,
+    [runId]
+  );
+  const approvalByStudent = new Map<string, any>();
+  for (const approval of pendingApprovals) {
+    const key = approval.assignment_student_id != null ? `id:${Number(approval.assignment_student_id)}` : `identity:${Number(approval.student_num)}\u0000${approval.name}`;
+    if (!approvalByStudent.has(key)) approvalByStudent.set(key, { ...approval, files: JSON.parse(String(approval.files_json || '[]')) });
+  }
   const filesByStudent = new Map<string, any[]>();
   for (const file of activeFiles) {
     const key = file.assignment_student_id != null
@@ -598,7 +621,8 @@ async function submissionStatusForRun(runId: string | number, sort: string) {
       ? `id:${Number(row.assignment_student_id)}`
       : `identity:${Number(row.student_num)}\u0000${row.name}`;
     const files = filesByStudent.get(key) || [];
-    if (!files.length) return { ...row, active_files: [] };
+    const pending_approval = approvalByStudent.get(key) || null;
+    if (!files.length) return { ...row, active_files: [], pending_approval };
     const latest = [...files].sort((a, b) => Number(b.id) - Number(a.id))[0];
     return {
       ...row,
@@ -610,6 +634,7 @@ async function submissionStatusForRun(runId: string | number, sort: string) {
       reject_reason: '',
       teacher_checked: files.every(file => Number(file.teacher_checked) === 1) ? 1 : 0,
       active_files: files,
+      pending_approval,
     };
   });
 }
@@ -698,6 +723,7 @@ function renderSummary(rows){
  summary.innerHTML='<span>총원 '+total+'명</span><span>결시 '+absent+'명</span><span>실시 '+present+'명</span><span>제출 '+submitted+'명</span><span>확인 '+checked+'명</span>'+(done?'<strong class="complete-badge">전원 확인 완료</strong>':'');
 }
 function statusHtml(s){
+ if(s.pending_approval)return '<span class="danger">확인 필요</span>';
  if(!s.submission_id)return Number(s.separate_artifact_count||0)>0?'<span class="ok">별도 산출물 있음</span>':'<span class="muted">미제출</span>';
  if(s.status==='rejected')return '<span class="danger">제출 실패</span><div class="muted">'+(s.reject_reason||'사유 없음')+'</div>';
  if(s.status==='no_file')return '<span class="muted">파일 미제출</span>';
@@ -707,8 +733,9 @@ function rowHtml(s){
  const isAbsent=Number(s.is_absent||0)===1;
  const submitted=!!s.submission_id;
  const checked=Number(s.teacher_checked||0)===1;
- const confirmable=submitted&&(s.status==='accepted'||s.status==='no_file');
- const file=s.status==='accepted'?(Array.isArray(s.active_files)&&s.active_files.length?s.active_files.map(item=>'<div><span class="muted">'+h(item.submission_slot_name||'파일')+'</span> <a target="_blank" rel="noopener" href="/file-preview/assignment/'+item.id+'?filename='+encodeURIComponent(item.original_filename||'')+'">'+h(item.original_filename)+'</a></div>').join(''):'<a target="_blank" rel="noopener" href="/file-preview/assignment/'+s.submission_id+'?filename='+encodeURIComponent(s.original_filename||'')+'">'+h(s.original_filename)+'</a>'):(s.status==='rejected'?'<span class="danger">저장 안 됨</span>':'<span class="muted">-</span>');
+ const confirmable=!s.pending_approval&&submitted&&(s.status==='accepted'||s.status==='no_file');
+ const pending=s.pending_approval?'<div>'+s.pending_approval.files.map(item=>'<div>'+h(item.filename)+' ('+Math.ceil(Number(item.size)/1024/1024)+'MB)</div>').join('')+'<div class="row"><button onclick="decideApproval('+s.pending_approval.id+',\'approve\')">승인</button><button class="secondary" onclick="decideApproval('+s.pending_approval.id+',\'reject\')">거부</button></div></div>':'';
+ const file=pending||(s.status==='accepted'?(Array.isArray(s.active_files)&&s.active_files.length?s.active_files.map(item=>'<div><span class="muted">'+h(item.submission_slot_name||'파일')+'</span> <a target="_blank" rel="noopener" href="/file-preview/assignment/'+item.id+'?filename='+encodeURIComponent(item.original_filename||'')+'">'+h(item.original_filename)+'</a></div>').join(''):'<a target="_blank" rel="noopener" href="/file-preview/assignment/'+s.submission_id+'?filename='+encodeURIComponent(s.original_filename||'')+'">'+h(s.original_filename)+'</a>'):(s.status==='rejected'?'<span class="danger">저장 안 됨</span>':'<span class="muted">-</span>'));
  const check=confirmable&&!isAbsent?'<input type="checkbox" '+(checked?'checked disabled':'')+' onchange="toggleCheck('+s.submission_id+',this.checked)">':'<span class="muted">-</span>';
  const absent='<input type="checkbox" '+(isAbsent?'checked':'')+' onchange="toggleRunAbsent('+s.run_student_id+',this.checked)">';
  return '<tr class="'+(isAbsent?'absent-row':'')+'"><td>'+absent+'</td><td>'+check+'</td><td>'+statusHtml(s)+'</td><td>'+(s.submitted_at||'-')+'</td><td>'+s.class_num+'</td><td>'+s.seat_num+'</td><td>'+s.name+'</td><td>'+(s.ip_address||'-')+'</td><td>'+file+'</td></tr>';
@@ -716,6 +743,7 @@ function rowHtml(s){
 async function loadClassRoster(){ if(currentRun||suppressRoster)return; if(!classSel.value){rosterRows=[];summary.innerHTML='';submissions.innerHTML='';return;} rosterRows=await j('/api/admin/classes/'+classSel.value+'/students'); const visible=orderedRows(visibleRows(rosterRows)); renderSummary(visible); submissions.innerHTML='<table><thead><tr><th>결시 여부</th><th>상태</th><th>반</th><th>번호</th><th>이름</th></tr></thead><tbody>'+visible.map(s=>'<tr class="'+(Number(s.is_absent||0)===1?'absent-row':'')+'"><td><input type="checkbox" '+(Number(s.is_absent||0)===1?'checked':'')+' onchange="toggleAbsent('+s.id+',this.checked)"></td><td>'+(Number(s.is_absent||0)===1?'<span class="danger">결시</span>':'<span class="muted">대기</span>')+'</td><td>'+s.class_num+'</td><td>'+s.seat_num+'</td><td>'+s.name+'</td></tr>').join('')+'</tbody></table>'; }
 async function loadSubs(){ if(!currentRun){await loadClassRoster();return;} const rows=await j('/api/teacher/runs/id/'+currentRun.id+'/submissions?sort='+sort.value); renderSummary(rows); submissions.innerHTML='<table><thead><tr><th>결시 여부</th><th>제출 확인</th><th>제출 상태</th><th>제출 시간</th><th>반</th><th>번호</th><th>이름</th><th>IP</th><th>파일</th></tr></thead><tbody>'+rows.map(rowHtml).join('')+'</tbody></table>'; }
 async function toggleCheck(id,checked){ await j('/api/teacher/submissions/'+id+'/check',{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({checked})}); await loadSubs(); }
+async function decideApproval(id,decision){await j('/api/admin/submission-approvals/'+id+'/'+decision,{method:'POST'});await loadSubs();}
 async function toggleAbsent(id,absent){ await j('/api/admin/students/'+id+'/absent',{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({absent})}); await loadSubs(); }
 async function toggleRunAbsent(id,absent){ await j('/api/admin/run-students/'+id+'/absent',{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({absent})}); await loadSubs(); }
 async function startRun(body){
@@ -807,10 +835,11 @@ teacherApp.get('/', async (req, res) => {
 async function j(url,opt){const r=await fetch(url,opt);if(!r.ok)throw new Error(await r.text());return r.json();}
 function h(value){return String(value??'').replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));}
 function renderSummary(rows){const total=rows.length;const absent=rows.filter(s=>Number(s.is_absent||0)===1).length;const present=total-absent;const submitted=rows.filter(s=>Number(s.is_absent||0)!==1&&!!s.submission_id).length;const checked=rows.filter(s=>Number(s.is_absent||0)!==1&&(s.status==='accepted'||s.status==='no_file')&&Number(s.teacher_checked||0)===1).length;const done=present>0&&checked>=present;summary.className='summary '+(done?'summary-done':'');summary.innerHTML='<span>총원 '+total+'명</span><span>결시 '+absent+'명</span><span>실시 '+present+'명</span><span>제출 '+submitted+'명</span><span>확인 '+checked+'명</span>'+(done?'<strong class="complete-badge">전원 확인 완료</strong>':'');}
-function statusHtml(s){if(!s.submission_id)return Number(s.separate_artifact_count||0)>0?'<span class="ok">별도 산출물 있음</span>':'<span class="muted">미제출</span>';if(s.status==='rejected')return '<span class="danger">제출 실패</span><div class="muted">'+(s.reject_reason||'사유 없음')+'</div>';if(s.status==='no_file')return '<span class="muted">파일 미제출</span>';return '<span class="ok">'+(Number(s.accepted_count||0)>1?'새로 제출됨':'제출됨')+'</span>';}
-function rowHtml(s){const isAbsent=Number(s.is_absent||0)===1;const submitted=!!s.submission_id;const checked=Number(s.teacher_checked||0)===1;const confirmable=submitted&&(s.status==='accepted'||s.status==='no_file');const file=s.status==='accepted'?(Array.isArray(s.active_files)&&s.active_files.length?s.active_files.map(item=>'<div><span class="muted">'+h(item.submission_slot_name||'파일')+'</span> <a target="_blank" rel="noopener" href="/file-preview/assignment/'+item.id+'?filename='+encodeURIComponent(item.original_filename||'')+'">'+h(item.original_filename)+'</a></div>').join(''):'<a target="_blank" rel="noopener" href="/file-preview/assignment/'+s.submission_id+'?filename='+encodeURIComponent(s.original_filename||'')+'">'+h(s.original_filename)+'</a>'):(s.status==='rejected'?'<span class="danger">저장 안 됨</span>':'<span class="muted">-</span>');const check=confirmable&&!isAbsent?'<input type="checkbox" '+(checked?'checked disabled':'')+' onchange="toggleCheck('+s.submission_id+',this.checked)">':'<span class="muted">-</span>';const absent='<input type="checkbox" '+(isAbsent?'checked':'')+' onchange="toggleAbsent('+s.run_student_id+',this.checked)">';return '<tr class="'+(isAbsent?'absent-row':'')+'"><td>'+absent+'</td><td>'+check+'</td><td>'+statusHtml(s)+'</td><td>'+(s.submitted_at||'-')+'</td><td>'+s.class_num+'</td><td>'+s.seat_num+'</td><td>'+h(s.name)+'</td><td>'+(s.ip_address||'-')+'</td><td>'+file+'</td></tr>';}
+function statusHtml(s){if(s.pending_approval)return '<span class="danger">확인 필요</span>';if(!s.submission_id)return Number(s.separate_artifact_count||0)>0?'<span class="ok">별도 산출물 있음</span>':'<span class="muted">미제출</span>';if(s.status==='rejected')return '<span class="danger">제출 실패</span><div class="muted">'+(s.reject_reason||'사유 없음')+'</div>';if(s.status==='no_file')return '<span class="muted">파일 미제출</span>';return '<span class="ok">'+(Number(s.accepted_count||0)>1?'새로 제출됨':'제출됨')+'</span>';}
+function rowHtml(s){const isAbsent=Number(s.is_absent||0)===1;const submitted=!!s.submission_id;const checked=Number(s.teacher_checked||0)===1;const confirmable=!s.pending_approval&&submitted&&(s.status==='accepted'||s.status==='no_file');const pending=s.pending_approval?'<div>'+s.pending_approval.files.map(item=>'<div>'+h(item.filename)+' ('+Math.ceil(Number(item.size)/1024/1024)+'MB)</div>').join('')+'<div class="row"><button onclick="decideApproval('+s.pending_approval.id+',\'approve\')">승인</button><button class="secondary" onclick="decideApproval('+s.pending_approval.id+',\'reject\')">거부</button></div></div>':'';const file=pending||(s.status==='accepted'?(Array.isArray(s.active_files)&&s.active_files.length?s.active_files.map(item=>'<div><span class="muted">'+h(item.submission_slot_name||'파일')+'</span> <a target="_blank" rel="noopener" href="/file-preview/assignment/'+item.id+'?filename='+encodeURIComponent(item.original_filename||'')+'">'+h(item.original_filename)+'</a></div>').join(''):'<a target="_blank" rel="noopener" href="/file-preview/assignment/'+s.submission_id+'?filename='+encodeURIComponent(s.original_filename||'')+'">'+h(s.original_filename)+'</a>'):(s.status==='rejected'?'<span class="danger">저장 안 됨</span>':'<span class="muted">-</span>'));const check=confirmable&&!isAbsent?'<input type="checkbox" '+(checked?'checked disabled':'')+' onchange="toggleCheck('+s.submission_id+',this.checked)">':'<span class="muted">-</span>';const absent='<input type="checkbox" '+(isAbsent?'checked':'')+' onchange="toggleAbsent('+s.run_student_id+',this.checked)">';return '<tr class="'+(isAbsent?'absent-row':'')+'"><td>'+absent+'</td><td>'+check+'</td><td>'+statusHtml(s)+'</td><td>'+(s.submitted_at||'-')+'</td><td>'+s.class_num+'</td><td>'+s.seat_num+'</td><td>'+h(s.name)+'</td><td>'+(s.ip_address||'-')+'</td><td>'+file+'</td></tr>';}
 async function load(){const rows=await j('/api/submissions?sort='+sort.value);renderSummary(rows);submissions.innerHTML='<table><thead><tr><th>결시 여부</th><th>제출 확인</th><th>제출 상태</th><th>제출 시간</th><th>반</th><th>번호</th><th>이름</th><th>IP</th><th>파일</th></tr></thead><tbody>'+rows.map(rowHtml).join('')+'</tbody></table>'}
 async function toggleCheck(id,checked){await j('/api/submissions/'+id+'/check',{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({checked})});await load();}
+async function decideApproval(id,decision){await j('/api/submission-approvals/'+id+'/'+decision,{method:'POST'});await load();}
 async function toggleAbsent(id,absent){await j('/api/students/'+id+'/absent',{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({absent})});await load();}
 sort.onchange=load;setInterval(load,3000);load();
 </script>`));
@@ -1231,6 +1260,64 @@ async function recordNoFileSubmission(req: any, run: any, student: any, studentN
   });
 }
 
+async function createSubmissionApproval(req: any, res: any, run: any) {
+  if (!run || !run.is_open) return res.status(403).json({ error: '제출이 열려 있지 않습니다.' });
+  const classNum = Number(req.body.classNum);
+  const seatNum = Number(req.body.seatNum);
+  const name = String(req.body.name || '').trim();
+  const files = Array.isArray(req.body.files) ? req.body.files : [];
+  if (!classNum || !seatNum || !name || !files.length) return res.status(400).json({ error: '학생 정보와 파일 정보가 필요합니다.' });
+  const studentNum = Number(run.grade) * 10000 + classNum * 100 + seatNum;
+  const student = await queryOne<any>('SELECT id FROM assignment_students WHERE assignment_class_id=? AND student_num=? AND name=?', [run.ac_id, studentNum, name]);
+  if (!student) return res.status(403).json({ error: '현재 수행 대상 학생이 아닙니다.' });
+  const checked = await queryOne('SELECT 1 FROM assignment_submissions WHERE run_id=? AND teacher_checked=1 AND assignment_student_id=? LIMIT 1', [run.id, student.id]);
+  if (checked) return res.status(409).json({ error: '교사가 제출을 확인하여 추가로 제출할 수 없습니다.' });
+  const rules = submissionRules(run.allowed_extensions, 50, 1);
+  const byId = new Map(rules.map(rule => [rule.id, rule]));
+  const normalized = files.map((file: any) => ({
+    slotId: String(file.slotId || ''),
+    filename: decodeUploadFilename(String(file.filename || '')),
+    size: Math.max(0, Number(file.size) || 0),
+  }));
+  for (const file of normalized) {
+    const rule = byId.get(file.slotId);
+    const ext = path.extname(file.filename).toLowerCase().replace(/^\./, '');
+    if (!rule || !file.filename || ext !== rule.extension) return res.status(400).json({ error: '제출 항목과 파일 형식이 일치하지 않습니다.' });
+  }
+  if (new Set(normalized.map(file => file.slotId)).size !== normalized.length) return res.status(400).json({ error: '제출 항목마다 파일은 1개만 선택할 수 있습니다.' });
+  const existing = await queryAll<{ submission_slot_id: string }>('SELECT DISTINCT submission_slot_id FROM assignment_submissions WHERE run_id=? AND status=? AND assignment_student_id=?', [run.id, 'accepted', student.id]);
+  const covered = new Set([...existing.map(row => row.submission_slot_id), ...normalized.map(file => file.slotId)]);
+  const missing = rules.filter(rule => rule.required && !covered.has(rule.id));
+  if (missing.length) return res.status(400).json({ error: `아직 제출하지 않은 항목이 있습니다: ${missing.map(rule => rule.name).join(', ')}` });
+  const thresholdBytes = (await uploadApprovalThresholdMb()) * 1024 * 1024;
+  if (!normalized.some(file => file.size > thresholdBytes)) return res.status(400).json({ error: '교사 확인이 필요한 대용량 파일이 없습니다.' });
+  await execute(`UPDATE assignment_submission_approvals SET status='cancelled', decided_at=datetime('now','localtime') WHERE run_id=? AND assignment_student_id=? AND status='pending'`, [run.id, student.id]);
+  const token = crypto.randomBytes(24).toString('hex');
+  const inserted = await execute(
+    `INSERT INTO assignment_submission_approvals(token,run_id,assignment_student_id,student_num,class_num,seat_num,name,files_json)
+     VALUES(?,?,?,?,?,?,?,?)`,
+    [token, run.id, student.id, studentNum, classNum, seatNum, name, JSON.stringify(normalized)]
+  );
+  res.json({ id: Number(inserted.lastInsertRowid), token, status: 'pending' });
+}
+
+async function submissionApprovalStatus(req: any, res: any) {
+  const row = await queryOne<any>('SELECT status FROM assignment_submission_approvals WHERE token=?', [req.params.token]);
+  if (!row) return res.status(404).json({ status: 'missing' });
+  res.json({ status: row.status });
+}
+
+async function decideSubmissionApproval(req: any, res: any) {
+  const status = req.params.decision === 'approve' ? 'approved' : req.params.decision === 'reject' ? 'rejected' : '';
+  if (!status) return res.status(400).json({ error: '승인 또는 거부를 선택하세요.' });
+  const result = await execute(
+    `UPDATE assignment_submission_approvals SET status=?, decided_at=datetime('now','localtime') WHERE id=? AND status='pending'`,
+    [status, req.params.id]
+  );
+  if (!result.rowsAffected) return res.status(409).json({ error: '이미 처리되었거나 존재하지 않는 요청입니다.' });
+  res.json({ ok: true, status });
+}
+
 async function handleSubmission(req: any, res: any, run: any) {
   const files = req.files as any[];
   if (!run || !run.is_open) return res.status(403).json({ error: '제출이 열려 있지 않습니다.' });
@@ -1283,8 +1370,8 @@ async function handleSubmission(req: any, res: any, run: any) {
     cleanupTempFiles(files);
     return res.status(400).json({ error: reason });
   }
-  if (!rules.length && files.length > Number(run.max_files || 1)) {
-    const reason = `최대 ${run.max_files}개까지 제출할 수 있습니다.`;
+  if (!rules.length && files.length > 1) {
+    const reason = '파일은 1개까지 제출할 수 있습니다.';
     await recordRejectedSubmission(req, run, student, studentNum, classNum, seatNum, name, files[0], reason);
     cleanupTempFiles(files);
     return res.status(400).json({ error: reason });
@@ -1295,7 +1382,7 @@ async function handleSubmission(req: any, res: any, run: any) {
     extension: '',
     required: true,
     max_file_size_mb: Number(run.max_file_size_mb || 50),
-    max_files: Number(run.max_files || 1),
+    max_files: 1,
   }];
   const ruleById = new Map(effectiveRules.map(rule => [rule.id, rule]));
   const counts = new Map<string, number>();
@@ -1323,12 +1410,6 @@ async function handleSubmission(req: any, res: any, run: any) {
       cleanupTempFiles(files);
       return res.status(400).json({ error: reason });
     }
-    if (file.size > rule.max_file_size_mb * 1024 * 1024) {
-      const reason = `${original} 파일이 ${rule.max_file_size_mb}MB 제한을 초과했습니다.`;
-      await recordRejectedSubmission(req, run, student, studentNum, classNum, seatNum, name, file, reason);
-      cleanupTempFiles(files);
-      return res.status(400).json({ error: reason });
-    }
   }
   if (rules.length) {
     const existingSlots = await queryAll<{ submission_slot_id: string }>(
@@ -1349,6 +1430,28 @@ async function handleSubmission(req: any, res: any, run: any) {
       cleanupTempFiles(files);
       return res.status(400).json({ error: reason });
     }
+  }
+  let approvalId = 0;
+  const thresholdBytes = (await uploadApprovalThresholdMb()) * 1024 * 1024;
+  if (files.some(file => Number(file.size || 0) > thresholdBytes)) {
+    const approvalToken = String(req.body.approvalToken || '');
+    const approval = await queryOne<any>(
+      `SELECT id, files_json FROM assignment_submission_approvals
+       WHERE token=? AND run_id=? AND assignment_student_id=? AND status='approved' AND consumed_at=''`,
+      [approvalToken, run.id, student.id]
+    );
+    const expected = approval ? JSON.parse(String(approval.files_json || '[]')) : [];
+    const actual = files.map((file, index) => ({
+      slotId: submittedSlotIds[index],
+      filename: decodeUploadFilename(file.originalname),
+      size: Number(file.size || 0),
+    }));
+    if (!approval || JSON.stringify(expected) !== JSON.stringify(actual)) {
+      const reason = '대용량 파일 승인 정보가 일치하지 않습니다. 다시 승인을 요청해 주세요.';
+      cleanupTempFiles(files);
+      return res.status(403).json({ error: reason });
+    }
+    approvalId = Number(approval.id);
   }
   const baseDir = path.join(SUBMISSIONS_DIR, String(run.year), String(run.semester), String(run.grade), safeSegment(run.subject), safeSegment(run.room), safeSegment(run.domain_name));
   fs.mkdirSync(baseDir, { recursive: true });
@@ -1394,6 +1497,9 @@ async function handleSubmission(req: any, res: any, run: any) {
       user_agent: String(req.headers['user-agent'] || '')
     });
   }
+  if (approvalId) {
+    await execute(`UPDATE assignment_submission_approvals SET status='consumed', consumed_at=datetime('now','localtime') WHERE id=?`, [approvalId]);
+  }
   res.json({ message: `${files.length}개 파일을 제출했습니다.` });
 }
 
@@ -1401,6 +1507,8 @@ studentApp.post('/api/public/submissions', upload.array('files', 20), async (req
   const run = await currentOpenRun();
   await handleSubmission(req, res, run);
 });
+studentApp.post('/api/public/submission-approvals', async (req, res) => createSubmissionApproval(req, res, await currentOpenRun()));
+studentApp.get('/api/public/submission-approvals/:token', submissionApprovalStatus);
 
 studentApp.get('/api/public/resources/:id/file', sendStudentResource);
 
@@ -1408,6 +1516,8 @@ app.post('/api/public/runs/:shareCode/submissions', upload.array('files', 20), a
   const run = await runByShareCode(req.params.shareCode);
   await handleSubmission(req, res, run);
 });
+app.post('/api/public/runs/:shareCode/submission-approvals', async (req, res) => createSubmissionApproval(req, res, await runByShareCode(req.params.shareCode)));
+app.get('/api/public/submission-approvals/:token', submissionApprovalStatus);
 
 async function submissionsForRun(runId: string | number, sort: string) {
   return submissionStatusForRun(runId, sort);
@@ -1416,12 +1526,14 @@ async function submissionsForRun(runId: string | number, sort: string) {
 app.get('/api/teacher/runs/id/:runId/submissions', requireLocal, async (req, res) => {
   res.json(await submissionsForRun(req.params.runId, String(req.query.sort || 'recent')));
 });
+app.post('/api/admin/submission-approvals/:id/:decision', requireLocal, decideSubmissionApproval);
 
 teacherApp.get('/api/submissions', requireTeacherAuth, async (req, res) => {
   const run = await currentOpenRun();
   if (!run) return res.status(404).json({ error: '진행 중인 수행이 없습니다.' });
   res.json(await submissionsForRun(run.id, String(req.query.sort || 'recent')));
 });
+teacherApp.post('/api/submission-approvals/:id/:decision', requireTeacherAuth, decideSubmissionApproval);
 
 async function checkSubmission(req: any, res: any) {
   const checked = req.body?.checked ? 1 : 0;

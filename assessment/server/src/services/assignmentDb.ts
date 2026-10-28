@@ -157,6 +157,21 @@ export async function initAssignmentDb(): Promise<void> {
       legacy_assessment_artifact_id INTEGER UNIQUE,
       uploaded_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
     );
+    CREATE TABLE IF NOT EXISTS assignment_submission_approvals (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      token TEXT NOT NULL UNIQUE,
+      run_id INTEGER NOT NULL REFERENCES assignment_runs(id) ON DELETE CASCADE,
+      assignment_student_id INTEGER REFERENCES assignment_students(id) ON DELETE SET NULL,
+      student_num INTEGER NOT NULL,
+      class_num INTEGER NOT NULL DEFAULT 0,
+      seat_num INTEGER NOT NULL DEFAULT 0,
+      name TEXT NOT NULL,
+      files_json TEXT NOT NULL DEFAULT '[]',
+      status TEXT NOT NULL DEFAULT 'pending',
+      created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+      decided_at TEXT NOT NULL DEFAULT '',
+      consumed_at TEXT NOT NULL DEFAULT ''
+    );
   `);
 
   await ensureColumn('assignment_configs', 'title', "TEXT NOT NULL DEFAULT ''");

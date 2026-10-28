@@ -37,6 +37,7 @@ export function SettingsContent({
   handleRestore,
   saveAssignmentTeacherPassword,
   clearAssignmentTeacherPassword,
+  saveAssignmentUploadApprovalMb,
   isOllama,
   isOpenAICompatible,
   needsKey,
@@ -646,6 +647,25 @@ export function SettingsContent({
 
       {activeTab === 'assignment' && (
       <div className="space-y-6">
+        <div className="card p-6 space-y-4">
+          <div>
+            <h3 className="text-sm font-semibold text-gray-800">대용량 제출 확인 기준</h3>
+            <p className="mt-1 text-xs text-gray-500">이 용량을 넘는 파일은 바로 업로드하지 않고 실시 현황판에서 교사의 승인 또는 거부를 기다립니다.</p>
+          </div>
+          <div className="flex items-end gap-2">
+            <label className="block">
+              <span className="label">파일 크기</span>
+              <div className="flex items-center gap-2">
+                <input type="number" min={1} className="input w-32" value={settings.assignmentUploadApprovalMb}
+                  onChange={(e) => setSettings((s) => ({ ...s, assignmentUploadApprovalMb: Math.max(1, Number(e.target.value) || 1) }))} />
+                <span className="text-sm text-gray-500">MB 초과 시 확인</span>
+              </div>
+            </label>
+            <button className="btn-primary" onClick={() => saveAssignmentUploadApprovalMb(settings.assignmentUploadApprovalMb).then(() => alert('저장되었습니다.'))}>
+              <Save size={14} /> 저장
+            </button>
+          </div>
+        </div>
         <div className="card p-6 space-y-5">
           <div>
             <h3 className="text-sm font-semibold text-gray-800">교사용 확인 화면 비밀번호</h3>

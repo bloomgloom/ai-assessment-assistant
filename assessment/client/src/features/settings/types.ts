@@ -53,6 +53,7 @@ export interface SettingsState {
   pdfRedactionTopCm: number;
   aiEnabled: boolean;
   assignmentTeacherPasswordSet?: boolean;
+  assignmentUploadApprovalMb: number;
   storage?: {
     currentRoot: string;
     defaultRoot: string;

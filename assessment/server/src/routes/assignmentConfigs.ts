@@ -86,8 +86,8 @@ function normalizeAllowedExtensions(value: string): string {
               name: String(item.name || item.content || item.label || extension).trim(),
               extension,
               required: item.required !== false && item.required !== 0,
-              max_file_size_mb: Math.max(1, Number(item.max_file_size_mb || item.maxFileSizeMb || 50)),
-              max_files: Math.max(1, Number(item.max_files || item.maxFiles || 1)),
+              max_file_size_mb: 50,
+              max_files: 1,
             };
           })
           .filter(item => item.id && item.name && item.extension)

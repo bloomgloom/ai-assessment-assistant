@@ -111,7 +111,16 @@ router.get('/', async (_req: Request, res: Response) => {
     'SELECT value FROM assignment_settings WHERE key=?',
     ['teacher_password_hash']
   );
-  res.json({ ...settings, storage: getStorageSettings(), assignmentTeacherPasswordSet: !!teacherPassword?.value });
+  const uploadApproval = await assignmentQueryOne<{ value: string }>(
+    'SELECT value FROM assignment_settings WHERE key=?',
+    ['submission_upload_approval_mb']
+  );
+  res.json({
+    ...settings,
+    storage: getStorageSettings(),
+    assignmentTeacherPasswordSet: !!teacherPassword?.value,
+    assignmentUploadApprovalMb: Math.max(1, Number(uploadApproval?.value) || 50),
+  });
 });
 
 router.put('/', async (req: Request, res: Response) => {
@@ -136,6 +145,7 @@ router.put('/', async (req: Request, res: Response) => {
     providerSettings,
     assignmentTeacherPassword,
     clearAssignmentTeacherPassword,
+    assignmentUploadApprovalMb,
   } = req.body;
   const concurrency = maxConcurrency != null ? Math.max(1, parseInt(String(maxConcurrency), 10) || 1) : undefined;
   
@@ -266,6 +276,13 @@ router.put('/', async (req: Request, res: Response) => {
     );
   } else if (clearAssignmentTeacherPassword === true) {
     await assignmentExecute('DELETE FROM assignment_settings WHERE key=?', ['teacher_password_hash']);
+  }
+  if (assignmentUploadApprovalMb != null) {
+    const value = Math.max(1, Math.floor(Number(assignmentUploadApprovalMb) || 50));
+    await assignmentExecute(
+      'INSERT OR REPLACE INTO assignment_settings(key, value) VALUES(?, ?)',
+      ['submission_upload_approval_mb', String(value)]
+    );
   }
 
   res.json({ ok: true, storage: getStorageSettings() });

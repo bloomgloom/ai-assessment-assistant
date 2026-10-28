@@ -216,8 +216,8 @@ function serializeExtensionRules(items: AssignmentExtensionRule[]) {
         name: item.name.trim(),
         extension: item.extension.trim().replace(/^\./, '').toLowerCase(),
         required: item.required !== false,
-        max_file_size_mb: Math.max(1, Number(item.max_file_size_mb) || 50),
-        max_files: Math.max(1, Number(item.max_files) || 1),
+        max_file_size_mb: 50,
+        max_files: 1,
       }))
       .filter(item => item.id && item.name && item.extension)
       .filter((item, index, arr) => arr.findIndex(other => other.id === item.id) === index)
@@ -437,8 +437,8 @@ export function DomainContent({
         name: item.name.trim(),
         extension: item.extension.trim().replace(/^\./, '').toLowerCase(),
         required: item.required !== false,
-        max_file_size_mb: Math.max(1, Number(item.max_file_size_mb) || 50),
-        max_files: Math.max(1, Number(item.max_files) || 1),
+        max_file_size_mb: 50,
+        max_files: 1,
       }))
       .filter(item => item.id && item.name && item.extension)
       .filter((item, index, arr) => arr.findIndex(other => other.id === item.id) === index);
@@ -1157,16 +1157,14 @@ export function DomainContent({
                     <div className="rounded-md border border-gray-300 bg-white p-2">
                       <div className="space-y-1">
                         {assignmentExtensionRules.length > 0 && (
-                          <div className="grid grid-cols-[minmax(100px,1.5fr)_80px_64px_90px_70px] gap-1 px-2 pb-1 text-[11px] font-medium text-gray-400">
+                          <div className="grid grid-cols-[minmax(120px,1fr)_90px_64px] gap-2 px-2 pb-1 text-[11px] font-medium text-gray-400">
                             <span className="text-center">내용</span>
                             <span className="text-center">확장자</span>
                             <span className="text-center">필수</span>
-                            <span className="text-center">최대 용량</span>
-                            <span className="text-center">파일 수</span>
                           </div>
                         )}
                         {assignmentExtensionRules.map((rule, index) => (
-                          <div key={rule.id} className="grid grid-cols-[minmax(100px,1.5fr)_80px_64px_90px_70px] items-center gap-1 rounded border border-gray-200 bg-gray-50 px-2 py-1.5">
+                          <div key={rule.id} className="grid grid-cols-[minmax(120px,1fr)_90px_64px] items-center gap-2 rounded border border-gray-200 bg-gray-50 px-2 py-1.5">
                             <input
                               className="input h-7 min-w-0 px-1.5 py-0 text-xs"
                               defaultValue={rule.name}
@@ -1204,34 +1202,6 @@ export function DomainContent({
                                 }}
                                 aria-label={`${rule.name} 필수 제출`}
                               />
-                            </div>
-                            <div className="flex items-center justify-center gap-1">
-                              <input
-                                className="input h-7 w-14 px-1.5 py-0 text-center text-xs"
-                                type="number"
-                                min={1}
-                                value={rule.max_file_size_mb}
-                                onChange={(e) => {
-                                  const next = [...assignmentExtensionRules];
-                                  next[index] = { ...rule, max_file_size_mb: Number(e.target.value) };
-                                  updateAssignmentExtensionRules(next);
-                                }}
-                              />
-                              <span className="text-[11px] text-gray-500">MB</span>
-                            </div>
-                            <div className="flex items-center justify-center gap-1">
-                              <input
-                                className="input h-7 w-12 px-1.5 py-0 text-center text-xs"
-                                type="number"
-                                min={1}
-                                value={rule.max_files}
-                                onChange={(e) => {
-                                  const next = [...assignmentExtensionRules];
-                                  next[index] = { ...rule, max_files: Number(e.target.value) };
-                                  updateAssignmentExtensionRules(next);
-                                }}
-                              />
-                              <span className="text-[11px] text-gray-500">개</span>
                             </div>
                           </div>
                         ))}
