@@ -87,6 +87,26 @@ interface RecordsViewPrefs {
   domainFilter?: string;
 }
 
+interface BulkZipUploadResultItem {
+  path: string;
+  status: 'uploaded' | 'unmatched' | 'conflict' | 'read_error';
+  studentId?: number;
+  student?: string;
+  reason?: string;
+}
+
+interface BulkZipUploadResult {
+  message: string;
+  count: number;
+  total: number;
+  studentCount: number;
+  unmatchedCount: number;
+  conflictCount: number;
+  errorCount: number;
+  results: BulkZipUploadResultItem[];
+  failed?: boolean;
+}
+
 function recordsViewPrefsKey(classItem: ClassItem) {
   return [
     RECORDS_VIEW_PREFS_PREFIX,
@@ -145,6 +165,7 @@ export function useRecordsPage() {
   const [selectedStudentIds, setSelectedStudentIds] = useState<Set<number>>(new Set());
   const [deleting, setDeleting] = useState(false);
   const [showClaudeBatchDialog, setShowClaudeBatchDialog] = useState(false);
+  const [bulkZipResult, setBulkZipResult] = useState<BulkZipUploadResult | null>(null);
 
   const [showGuide, setShowGuide] = useState(() => localStorage.getItem(RECORDS_GUIDE_KEY) !== '1');
   const recordsTree = useRecordsTree(classes);
@@ -175,6 +196,14 @@ export function useRecordsPage() {
     () => stableContentStringify(contents) !== stableContentStringify(savedContents)
       || stableContentStringify(writtenScores) !== stableContentStringify(savedWrittenScores),
     [contents, savedContents, writtenScores, savedWrittenScores]
+  );
+  const bulkZipStudentRows = useMemo(() => students.map(student => ({
+    student,
+    results: bulkZipResult?.results.filter(result => result.studentId === student.id) || [],
+  })), [students, bulkZipResult]);
+  const bulkZipUnassignedResults = useMemo(
+    () => bulkZipResult?.results.filter(result => result.studentId == null) || [],
+    [bulkZipResult]
   );
 
   useEffect(() => {
@@ -1195,11 +1224,21 @@ export function useRecordsPage() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || '업로드 실패');
 
-      alert(data.message);
+      setBulkZipResult(data as BulkZipUploadResult);
       await loadDomainData(selectedClass);
       setArtifactRefreshKey(k => k + 1);
     } catch (err: any) {
-      alert(`오류: ${err.message}`);
+      setBulkZipResult({
+        message: `오류: ${err.message}`,
+        count: 0,
+        total: 0,
+        studentCount: 0,
+        unmatchedCount: 0,
+        conflictCount: 0,
+        errorCount: 1,
+        results: [],
+        failed: true,
+      });
     } finally {
       setUploadingZip(false);
       if (fileInputRef.current) fileInputRef.current.value = '';
@@ -1630,6 +1669,113 @@ export function useRecordsPage() {
                         })}
                       </tbody>
                     </table>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+          {bulkZipResult && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4" onClick={() => setBulkZipResult(null)}>
+              <div className="flex max-h-[80vh] w-full max-w-4xl flex-col rounded-lg border border-gray-200 bg-white shadow-xl" onClick={(e) => e.stopPropagation()}>
+                <div className="flex items-center justify-between border-b border-gray-100 px-5 py-4">
+                  <div>
+                    <h3 className="text-sm font-semibold text-gray-900">ZIP 일괄 업로드 결과</h3>
+                    <p className="mt-1 text-xs text-gray-500">
+                      {selectedClass.year}학년도 {selectedClass.semester}학기 {selectedClass.grade}학년 {selectedClass.subject} {selectedClass.room} · {domainFilter}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    className="rounded px-2 py-1 text-sm text-gray-500 hover:bg-gray-100 hover:text-gray-700"
+                    onClick={() => setBulkZipResult(null)}
+                  >
+                    닫기
+                  </button>
+                </div>
+                <div className="min-h-0 overflow-auto p-5">
+                  <p className={`mb-4 text-sm ${bulkZipResult.failed ? 'text-red-600' : 'text-gray-700'}`}>
+                    {bulkZipResult.message}
+                  </p>
+                  {!bulkZipResult.failed && (
+                    <>
+                      <div className="mb-5 grid grid-cols-2 gap-2 sm:grid-cols-5">
+                        {[
+                          ['전체 파일', bulkZipResult.total, 'text-gray-800'],
+                          ['등록', bulkZipResult.count, 'text-emerald-700'],
+                          ['연결 학생', bulkZipResult.studentCount, 'text-blue-700'],
+                          ['미매칭', bulkZipResult.unmatchedCount, 'text-amber-700'],
+                          ['충돌/오류', bulkZipResult.conflictCount + bulkZipResult.errorCount, 'text-red-700'],
+                        ].map(([label, value, color]) => (
+                          <div key={String(label)} className="rounded-md border border-gray-200 bg-gray-50 px-3 py-2 text-center">
+                            <div className="text-[11px] text-gray-500">{label}</div>
+                            <div className={`mt-0.5 text-lg font-semibold tabular-nums ${color}`}>{value}</div>
+                          </div>
+                        ))}
+                      </div>
+                      {students.length > 0 && (
+                        <table className="w-full table-fixed border-collapse text-xs">
+                          <thead className="sticky top-0 bg-gray-50 text-gray-600">
+                            <tr className="border-b border-gray-200">
+                              <th className="w-12 px-3 py-2 text-center">반</th>
+                              <th className="w-12 px-3 py-2 text-center">번호</th>
+                              <th className="w-24 px-3 py-2 text-left">이름</th>
+                              <th className="w-24 px-3 py-2 text-center">결과</th>
+                              <th className="px-3 py-2 text-left">등록 파일</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {bulkZipStudentRows.map(({ student, results: studentResults }) => {
+                              const classNum = Math.floor((student.student_num % 10000) / 100);
+                              const seatNum = student.student_num % 100;
+                              const uploaded = studentResults.filter(result => result.status === 'uploaded');
+                              const errors = studentResults.filter(result => result.status === 'read_error');
+                              const status = errors.length
+                                ? { label: `오류 ${errors.length}개`, color: 'text-red-700' }
+                                : uploaded.length
+                                  ? { label: `등록 ${uploaded.length}개`, color: 'text-emerald-700' }
+                                  : { label: '없음', color: 'text-gray-400' };
+                              return (
+                                <tr key={student.id} className="border-b border-gray-100 align-top last:border-b-0">
+                                  <td className="px-3 py-2 text-center text-gray-600">{classNum}</td>
+                                  <td className="px-3 py-2 text-center text-gray-600">{seatNum}</td>
+                                  <td className="px-3 py-2 font-medium text-gray-800">{student.name}</td>
+                                  <td className={`px-3 py-2 text-center font-semibold ${status.color}`}>{status.label}</td>
+                                  <td className="px-3 py-2 text-gray-700">
+                                    {studentResults.length === 0 ? (
+                                      <span className="text-gray-400">-</span>
+                                    ) : (
+                                      <div className="space-y-1">
+                                        {studentResults.map((result, index) => (
+                                          <div key={`${result.path}:${index}`} className={result.status === 'read_error' ? 'text-red-600' : 'break-all'}>
+                                            {result.path}{result.reason ? ` — ${result.reason}` : ''}
+                                          </div>
+                                        ))}
+                                      </div>
+                                    )}
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      )}
+                      {bulkZipUnassignedResults.length > 0 && (
+                        <div className="mt-5 rounded-md border border-amber-200 bg-amber-50 p-3">
+                          <h4 className="text-xs font-semibold text-amber-800">학생에게 연결되지 않은 파일</h4>
+                          <div className="mt-2 space-y-1.5 text-xs">
+                            {bulkZipUnassignedResults.map((result, index) => (
+                              <div key={`${result.path}:${index}`} className="flex gap-3">
+                                <span className={`w-12 shrink-0 font-semibold ${result.status === 'unmatched' ? 'text-amber-700' : 'text-red-700'}`}>
+                                  {result.status === 'unmatched' ? '미매칭' : '충돌'}
+                                </span>
+                                <span className="min-w-0 break-all text-gray-700">{result.path}</span>
+                                <span className="shrink-0 text-gray-500">{result.reason}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </>
                   )}
                 </div>
               </div>

@@ -61,9 +61,9 @@ function uniqueArtifactPath(baseDir: string, filename: string, index: number): s
 }
 
 /**
- * 파일명에서 "5자리 학번 + 이름" 패턴을 찾아
- * 주어진 학생 목록과 학번·이름 모두 일치하는 학생을 반환한다.
- * - 파일명 앞/중간/뒤에 다른 문자열이 있어도 허용
+ * ZIP 내부 파일의 전체 상대 경로에서 "5자리 학번 + 이름" 패턴을 찾아
+ * 학번·이름 모두 일치하는 학생을 반환한다.
+ * - 파일명이나 상위 폴더 어디에 있어도 허용
  * - 학번은 5자리 숫자이며, 이름보다 앞에 있어야 함
  * - 이름은 2~5자 학생명만 대상으로 함
  * - 순서는 반드시 학번 → 이름 순
@@ -72,28 +72,28 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-function matchStudentByFilename(
-  decodedName: string,
+function matchStudentsByPath(
+  decodedPath: string,
   students: { id: number; student_num: number; name: string }[]
-): { id: number; student_num: number; name: string } | undefined {
-  const normalizedName = decodedName.normalize('NFC');
+): { id: number; student_num: number; name: string }[] {
+  const normalizedPath = decodedPath.normalize('NFC');
   const candidates = [...students]
     .filter(student => student.name.length >= 2 && student.name.length <= 5)
     .sort((a, b) => b.name.length - a.name.length);
 
-  for (const student of candidates) {
+  return candidates.filter(student => {
     const numberPattern = new RegExp(`(?<![0-9])${student.student_num}(?![0-9])`, 'g');
     const namePattern = new RegExp(escapeRegExp(student.name), 'g');
 
-    const numberPositions = [...normalizedName.matchAll(numberPattern)].map(match => match.index ?? -1);
-    if (numberPositions.length === 0) continue;
+    const numberPositions = [...normalizedPath.matchAll(numberPattern)].map(match => match.index ?? -1);
+    if (numberPositions.length === 0) return false;
 
-    for (const nameMatch of normalizedName.matchAll(namePattern)) {
+    for (const nameMatch of normalizedPath.matchAll(namePattern)) {
       const nameIndex = nameMatch.index ?? -1;
-      if (numberPositions.some(numberIndex => numberIndex >= 0 && numberIndex < nameIndex)) return student;
+      if (numberPositions.some(numberIndex => numberIndex >= 0 && numberIndex < nameIndex)) return true;
     }
-  }
-  return undefined;
+    return false;
+  });
 }
 
 async function deleteArtifactRows(rows: { id: number; filepath: string }[]): Promise<void> {
@@ -392,6 +392,14 @@ router.post('/bulk-upload/:classId', upload.single('file'), async (req: Request,
     let count = 0;
     const sampleFilenames: string[] = [];
     let fileEntryCount = 0;
+    const matchedStudentIds = new Set<number>();
+    const results: Array<{
+      path: string;
+      status: 'uploaded' | 'unmatched' | 'conflict' | 'read_error';
+      studentId?: number;
+      student?: string;
+      reason?: string;
+    }> = [];
 
     const directory = await unzipper.Open.file(req.file.path);
 
@@ -410,15 +418,27 @@ router.post('/bulk-upload/:classId', upload.single('file'), async (req: Request,
       fileEntryCount++;
       if (sampleFilenames.length < 5) sampleFilenames.push(rawFileName);
 
-      // 파일명 인코딩 처리 (UTF-8 우선, 깨지면 latin1→utf8)
-      let decodedName = rawFileName.normalize('NFC');
-      if (decodedName.includes('\uFFFD')) {
-        try { decodedName = Buffer.from(rawFileName, 'latin1').toString('utf8').normalize('NFC'); } catch {}
+      // 전체 상대 경로의 인코딩을 복원한 뒤 폴더와 파일명을 함께 검사한다.
+      let decodedPath = fullPath.normalize('NFC');
+      if (decodedPath.includes('\uFFFD')) {
+        try { decodedPath = Buffer.from(fullPath, 'latin1').toString('utf8').normalize('NFC'); } catch {}
       }
+      const decodedName = decodedPath.split(/[/\\]/).pop() || rawFileName.normalize('NFC');
 
-      // 파일명에서 "학번(5자리) + 이름(한글 2~4자)" 패턴을 추출해 DB와 학번·이름 모두 매칭
-      const student = matchStudentByFilename(decodedName, students);
-      if (!student) continue;
+      const matchedStudents = matchStudentsByPath(decodedPath, students);
+      if (matchedStudents.length === 0) {
+        results.push({ path: decodedPath, status: 'unmatched', reason: '경로에서 학번·이름을 찾지 못했습니다.' });
+        continue;
+      }
+      if (matchedStudents.length > 1) {
+        results.push({
+          path: decodedPath,
+          status: 'conflict',
+          reason: `여러 학생과 일치: ${matchedStudents.map(student => `${student.student_num}${student.name}`).join(', ')}`,
+        });
+        continue;
+      }
+      const student = matchedStudents[0];
 
       // 파일 내용 읽기
       let fileBuffer: Buffer;
@@ -426,6 +446,13 @@ router.post('/bulk-upload/:classId', upload.single('file'), async (req: Request,
         fileBuffer = await entry.buffer();
       } catch (e) {
         console.error(`항목 읽기 실패, 건너뜀: ${fullPath}`, e);
+        results.push({
+          path: decodedPath,
+          status: 'read_error',
+          studentId: student.id,
+          student: `${student.student_num}${student.name}`,
+          reason: '파일을 읽지 못했습니다.',
+        });
         continue;
       }
 
@@ -440,16 +467,32 @@ router.post('/bulk-upload/:classId', upload.single('file'), async (req: Request,
         [student.id, domain, decodedName, toStoredPath(savePath), ct, fileBuffer.length]
       );
       count++;
+      matchedStudentIds.add(student.id);
+      results.push({
+        path: decodedPath,
+        status: 'uploaded',
+        studentId: student.id,
+        student: `${student.student_num}${student.name}`,
+      });
     }
 
     fs.unlinkSync(req.file.path);
 
     let message = `총 ${count}개의 산출물 파일이 성공적으로 연동되었습니다.`;
     if (count === 0 && fileEntryCount > 0) {
-      message += ` (ZIP에서 ${fileEntryCount}개 파일 발견, DB 학생 ${students.length}명과 매칭 없음. 파일명에 "학번(5자리)+이름(한글)" 패턴이 있어야 합니다. 파일명 예시: ${sampleFilenames.join(', ')})`;
+      message += ` (ZIP에서 ${fileEntryCount}개 파일 발견, DB 학생 ${students.length}명과 매칭 없음. 파일 경로에 "학번(5자리)+이름" 패턴이 있어야 합니다. 파일명 예시: ${sampleFilenames.join(', ')})`;
     }
 
-    res.json({ message, count });
+    res.json({
+      message,
+      count,
+      total: fileEntryCount,
+      studentCount: matchedStudentIds.size,
+      unmatchedCount: results.filter(result => result.status === 'unmatched').length,
+      conflictCount: results.filter(result => result.status === 'conflict').length,
+      errorCount: results.filter(result => result.status === 'read_error').length,
+      results,
+    });
   } catch (error: any) {
     try { if (req.file) fs.unlinkSync(req.file.path); } catch {}
     res.status(500).json({ error: error.message });
