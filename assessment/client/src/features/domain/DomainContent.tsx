@@ -1157,14 +1157,14 @@ export function DomainContent({
                     <div className="rounded-md border border-gray-300 bg-white p-2">
                       <div className="space-y-1">
                         {assignmentExtensionRules.length > 0 && (
-                          <div className="grid grid-cols-[minmax(120px,1fr)_90px_64px] gap-2 px-2 pb-1 text-[11px] font-medium text-gray-400">
+                          <div className="grid grid-cols-[minmax(0,1fr)_58px_38px] gap-1 px-1 pb-1 text-[10px] font-medium text-gray-400">
                             <span className="text-center">내용</span>
                             <span className="text-center">확장자</span>
                             <span className="text-center">필수</span>
                           </div>
                         )}
                         {assignmentExtensionRules.map((rule, index) => (
-                          <div key={rule.id} className="grid grid-cols-[minmax(120px,1fr)_90px_64px] items-center gap-2 rounded border border-gray-200 bg-gray-50 px-2 py-1.5">
+                          <div key={rule.id} className="grid min-w-0 grid-cols-[minmax(0,1fr)_58px_38px] items-center gap-1 rounded border border-gray-200 bg-gray-50 px-1 py-1.5">
                             <input
                               className="input h-7 min-w-0 px-1.5 py-0 text-xs"
                               defaultValue={rule.name}
@@ -1177,7 +1177,7 @@ export function DomainContent({
                             />
                             <div className="flex justify-center">
                               <div className="relative group">
-                                <span className={`px-2 py-0.5 text-[11px] font-bold rounded border whitespace-nowrap ${extBadgeClass(rule.extension)}`}>
+                                <span className={`px-1 py-0.5 text-[10px] font-bold rounded border whitespace-nowrap ${extBadgeClass(rule.extension)}`}>
                                   {rule.extension.toUpperCase()}
                                 </span>
                                 <button
