@@ -8,6 +8,10 @@ import { UPLOADS_DIR, ensureDir } from '../services/storage';
 import { decodeUploadFilename } from '../services/filename';
 import { parseAreaManagementExcel, parseAchievementStandardsExcel } from '../services/excel';
 import informationCurriculumStandards from '../data/informationCurriculumStandards.json';
+import {
+  deleteAssignmentConfigsForScope,
+  pruneAssignmentConfigsForAssessmentScope,
+} from './assignmentConfigs';
 
 const router = Router();
 const CRITERIA_UPLOAD_DIR = path.join(UPLOADS_DIR, 'criteria');
@@ -500,6 +504,7 @@ router.delete('/domains/source-file', async (req: Request, res: Response) => {
       [year, semester, grade, subject]
     );
   });
+  await deleteAssignmentConfigsForScope({ year, semester, grade, subject });
   res.json({ ok: true });
 });
 
@@ -533,6 +538,7 @@ router.delete('/domains/scope', async (req: Request, res: Response) => {
       await execute(`DELETE FROM domain_ai_prompts WHERE ${where}`, args);
     }
   });
+  await deleteAssignmentConfigsForScope({ year, semester, grade, subject, domainName });
   res.json({ ok: true });
 });
 
@@ -640,6 +646,12 @@ router.post('/domains/upload', domainUpload.single('file'), async (req: Request,
         );
       }
     });
+    await pruneAssignmentConfigsForAssessmentScope(
+      parsed.info.year,
+      parsed.info.semester,
+      parsed.info.grade,
+      parsed.info.subject
+    );
     res.json({
       ...parsed.info,
       credit: parsed.info.credit,
@@ -866,6 +878,12 @@ router.delete('/custom-domains/:id', async (req: Request, res: Response) => {
         [existing.year, existing.semester, existing.grade, existing.subject, existing.name]
       );
     });
+    await pruneAssignmentConfigsForAssessmentScope(
+      existing.year,
+      existing.semester,
+      existing.grade,
+      existing.subject
+    );
   }
   res.json({ ok: true });
 });
@@ -1193,6 +1211,7 @@ router.post('/subject-config/upload', tempUpload.single('file'), async (req: Req
         );
       }
     });
+    await pruneAssignmentConfigsForAssessmentScope(year, semester, grade, subject);
 
     res.json({
       ok: true,

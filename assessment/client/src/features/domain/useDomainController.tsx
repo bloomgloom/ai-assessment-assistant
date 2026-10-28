@@ -496,7 +496,7 @@ export function useDomainController() {
   ) => {
     if (!selectedSubject || !selectedDomain || !assignmentConfig) return true;
     const nextConfig = { ...assignmentConfig, ...overrides };
-    await assignmentConfigsApi.saveConfig({
+    const response = await assignmentConfigsApi.saveConfig({
       year: selectedSubject.year,
       semester: selectedSubject.semester,
       grade: selectedSubject.grade,
@@ -511,6 +511,7 @@ export function useDomainController() {
       refresh_guide: options.refreshGuide === true,
     });
     await loadAssignment(selectedSubject, selectedDomain, false);
+    if (response.data?.warning) alert(response.data.warning);
     setIsDirty(false);
     return true;
   };
@@ -563,7 +564,8 @@ export function useDomainController() {
     try {
       const existing = assignmentResources.find(resource => resource.source_url === url);
       if (existing) {
-        await assignmentConfigsApi.refreshResourceLink(existing.id);
+        const response = await assignmentConfigsApi.refreshResourceLink(existing.id);
+        if (response.data?.warning) alert(response.data.warning);
       } else {
         await assignmentConfigsApi.addResourceLink({
           year: selectedSubject.year,

@@ -17,6 +17,7 @@ export interface AssignmentResource {
   size: number;
   uploaded_at: string;
   source_url: string;
+  checked_at: string;
 }
 
 export interface AssignmentClassSnapshot {
@@ -36,6 +37,7 @@ export interface AssignmentConfig {
   title: string;
   guide_md: string;
   guide_url: string;
+  guide_checked_at: string;
   resolved_guide_md?: string;
   guide_fetch_error?: string;
   allowed_extensions: string;

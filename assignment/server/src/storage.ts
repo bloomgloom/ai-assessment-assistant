@@ -12,6 +12,7 @@ export const TRASH_DIR = path.join(STORAGE_ROOT, 'trash');
 export const SUBMISSIONS_DIR = path.join(UPLOADS_DIR, 'submissions');
 export const TEMP_DIR = path.join(UPLOADS_DIR, 'assignment-temp');
 export const RUN_RESOURCES_DIR = path.join(UPLOADS_DIR, 'assignment-run-resources');
+export const ASSIGNMENT_RESOURCES_DIR = path.join(UPLOADS_DIR, 'assignment-resources');
 
 export function ensureDir(dir: string) {
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
@@ -30,7 +31,7 @@ export function resolveStoredPath(filepath: string): string {
   return path.isAbsolute(filepath) ? filepath : path.join(STORAGE_ROOT, filepath);
 }
 
-[DATA_DIR, LOGS_DIR, TRASH_DIR, UPLOADS_DIR, SUBMISSIONS_DIR, TEMP_DIR, RUN_RESOURCES_DIR].forEach(ensureDir);
+[DATA_DIR, LOGS_DIR, TRASH_DIR, UPLOADS_DIR, SUBMISSIONS_DIR, TEMP_DIR, RUN_RESOURCES_DIR, ASSIGNMENT_RESOURCES_DIR].forEach(ensureDir);
 
 export function moveFileToTrash(filepath: string, category: string): string {
   const source = resolveStoredPath(filepath);

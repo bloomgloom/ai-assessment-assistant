@@ -39,6 +39,7 @@ export async function initAssignmentDb(): Promise<void> {
       title TEXT NOT NULL DEFAULT '',
       guide_md TEXT NOT NULL DEFAULT '',
       guide_url TEXT NOT NULL DEFAULT '',
+      guide_checked_at TEXT NOT NULL DEFAULT '',
       allowed_extensions TEXT NOT NULL DEFAULT '',
       max_file_size_mb INTEGER NOT NULL DEFAULT 50,
       max_files INTEGER NOT NULL DEFAULT 1,
@@ -57,6 +58,7 @@ export async function initAssignmentDb(): Promise<void> {
       mime_type TEXT NOT NULL DEFAULT '',
       size INTEGER NOT NULL DEFAULT 0,
       source_url TEXT NOT NULL DEFAULT '',
+      checked_at TEXT NOT NULL DEFAULT '',
       uploaded_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
     );
 
@@ -156,6 +158,7 @@ export async function initAssignmentDb(): Promise<void> {
   await ensureColumn('assignment_configs', 'title', "TEXT NOT NULL DEFAULT ''");
   await ensureColumn('assignment_configs', 'guide_md', "TEXT NOT NULL DEFAULT ''");
   await ensureColumn('assignment_configs', 'guide_url', "TEXT NOT NULL DEFAULT ''");
+  await ensureColumn('assignment_configs', 'guide_checked_at', "TEXT NOT NULL DEFAULT ''");
   await ensureColumn('assignment_configs', 'allowed_extensions', "TEXT NOT NULL DEFAULT ''");
   await ensureColumn('assignment_configs', 'max_file_size_mb', "INTEGER NOT NULL DEFAULT 50");
   await ensureColumn('assignment_configs', 'max_files', "INTEGER NOT NULL DEFAULT 1");
@@ -166,6 +169,7 @@ export async function initAssignmentDb(): Promise<void> {
   await ensureColumn('assignment_resources', 'mime_type', "TEXT NOT NULL DEFAULT ''");
   await ensureColumn('assignment_resources', 'size', "INTEGER NOT NULL DEFAULT 0");
   await ensureColumn('assignment_resources', 'source_url', "TEXT NOT NULL DEFAULT ''");
+  await ensureColumn('assignment_resources', 'checked_at', "TEXT NOT NULL DEFAULT ''");
   await ensureColumn('assignment_resources', 'uploaded_at', "TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))");
   await ensureColumn('assignment_classes', 'assessment_class_id', "INTEGER NOT NULL DEFAULT 0");
   await ensureColumn('assignment_classes', 'created_at', "TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))");

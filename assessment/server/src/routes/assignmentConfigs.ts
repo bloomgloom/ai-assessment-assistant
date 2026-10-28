@@ -13,6 +13,18 @@ const router = Router();
 const RESOURCE_DIR = path.join(UPLOADS_DIR, 'assignment-resources');
 ensureDir(RESOURCE_DIR);
 
+function resourceCachePath(filename: string): string {
+  const safeName = path.basename(filename).replace(/[^\p{L}\p{N}._-]+/gu, '_') || 'github-resource';
+  return path.join(RESOURCE_DIR, `${Date.now()}_${crypto.randomBytes(6).toString('hex')}_${safeName}`);
+}
+
+function writeResourceCache(filename: string, buffer: Buffer, storedFilepath = ''): string {
+  const filepath = storedFilepath ? resolveStoredPath(storedFilepath) : resourceCachePath(filename);
+  ensureDir(path.dirname(filepath));
+  fs.writeFileSync(filepath, buffer);
+  return toStoredPath(filepath);
+}
+
 const upload = multer({
   storage: multer.diskStorage({
     destination: (_req, _file, cb) => cb(null, RESOURCE_DIR),
@@ -254,6 +266,110 @@ export async function deleteAssignmentSnapshotForAssessmentClass(classId: number
   }
 }
 
+type AssignmentConfigDeleteScope = {
+  year?: number;
+  semester?: number;
+  grade?: number;
+  subject?: string;
+  domainName?: string;
+};
+
+async function deleteAssignmentConfigs(scope: AssignmentConfigDeleteScope): Promise<number> {
+  const conditions: string[] = [];
+  const args: Array<string | number> = [];
+  if (scope.year !== undefined) { conditions.push('year=?'); args.push(scope.year); }
+  if (scope.semester !== undefined) { conditions.push('semester=?'); args.push(scope.semester); }
+  if (scope.grade !== undefined) { conditions.push('grade=?'); args.push(scope.grade); }
+  if (scope.subject !== undefined) { conditions.push('subject=?'); args.push(scope.subject); }
+  if (scope.domainName !== undefined) { conditions.push('domain_name=?'); args.push(scope.domainName); }
+  const where = conditions.length ? conditions.join(' AND ') : '1=1';
+  const configs = await assignmentQueryAll<{ id: number }>(
+    `SELECT id FROM assignment_configs WHERE ${where}`,
+    args
+  );
+  if (!configs.length) return 0;
+
+  const configIds = configs.map(config => Number(config.id));
+  const placeholders = configIds.map(() => '?').join(',');
+  const files = await assignmentQueryAll<{ filepath: string }>(
+    `SELECT filepath FROM assignment_resources WHERE config_id IN (${placeholders}) AND filepath!=''
+     UNION
+     SELECT resource.filepath
+     FROM assignment_run_resources resource
+     JOIN assignment_runs run ON run.id=resource.run_id
+     WHERE run.config_id IN (${placeholders}) AND resource.filepath!=''
+     UNION
+     SELECT submission.filepath
+     FROM assignment_submissions submission
+     JOIN assignment_runs run ON run.id=submission.run_id
+     WHERE run.config_id IN (${placeholders}) AND submission.filepath!=''`,
+    [...configIds, ...configIds, ...configIds]
+  );
+  const moved: Array<{ trashPath: string; originalFilepath: string }> = [];
+  try {
+    for (const filepath of new Set(files.map(file => String(file.filepath || '')).filter(Boolean))) {
+      const trashPath = moveFileToTrash(filepath, 'deleted-assignment-configs');
+      if (trashPath) moved.push({ trashPath, originalFilepath: filepath });
+    }
+    await assignmentTransaction(async () => {
+      await assignmentExecute(
+        `DELETE FROM assignment_configs WHERE id IN (${placeholders})`,
+        configIds
+      );
+    });
+    return configIds.length;
+  } catch (error) {
+    for (const file of moved.reverse()) {
+      try { restoreTrashedFile(file.trashPath, file.originalFilepath); } catch {}
+    }
+    throw error;
+  }
+}
+
+export async function deleteAssignmentConfigsForScope(scope: AssignmentConfigDeleteScope): Promise<number> {
+  if (scope.year === undefined) throw new Error('평가 실시 설정 삭제에는 학년도가 필요합니다.');
+  return deleteAssignmentConfigs(scope);
+}
+
+export async function deleteAllAssignmentConfigs(): Promise<number> {
+  return deleteAssignmentConfigs({});
+}
+
+export async function pruneAssignmentConfigsForAssessmentScope(
+  year: number,
+  semester: number,
+  grade: number,
+  subject: string
+): Promise<number> {
+  const activeDomains = await queryAll<{ name: string }>(
+    `SELECT name
+     FROM (
+       SELECT name FROM subject_domains
+       WHERE year=? AND semester=? AND grade=? AND subject=? AND name!=''
+         AND ((eval_type='수행' AND reflected='O') OR eval_type='기록')
+       UNION
+       SELECT name FROM custom_domains
+       WHERE year=? AND semester=? AND grade=? AND subject=? AND name!=''
+     )`,
+    [year, semester, grade, subject, year, semester, grade, subject]
+  );
+  const activeNames = new Set(activeDomains.map(domain => domain.name));
+  const configs = await assignmentQueryAll<{ domain_name: string }>(
+    `SELECT domain_name FROM assignment_configs
+     WHERE year=? AND semester=? AND grade=? AND subject=?`,
+    [year, semester, grade, subject]
+  );
+  let deleted = 0;
+  for (const config of configs) {
+    if (!activeNames.has(config.domain_name)) {
+      deleted += await deleteAssignmentConfigsForScope({
+        year, semester, grade, subject, domainName: config.domain_name,
+      });
+    }
+  }
+  return deleted;
+}
+
 router.get('/config', async (req: Request, res: Response) => {
   const s = scope(req);
   if (!assertScope(s, res)) return;
@@ -265,11 +381,14 @@ router.get('/config', async (req: Request, res: Response) => {
     try {
       const latestGuide = await fetchGithubText(String(config.guide_url));
       await assignmentExecute(
-        `UPDATE assignment_configs SET guide_md=?, updated_at=datetime('now', 'localtime') WHERE id=?`,
+        `UPDATE assignment_configs
+         SET guide_md=?, guide_checked_at=datetime('now', 'localtime'), updated_at=datetime('now', 'localtime')
+         WHERE id=?`,
         [latestGuide, configId]
       );
       config.guide_md = latestGuide;
       config.resolved_guide_md = latestGuide;
+      config.guide_checked_at = new Date().toLocaleString('sv-SE');
     } catch (error) {
       config.resolved_guide_md = String(config.guide_md || '');
       config.guide_fetch_error = error instanceof Error ? error.message : String(error);
@@ -278,7 +397,7 @@ router.get('/config', async (req: Request, res: Response) => {
     config.resolved_guide_md = String(config.guide_md || '');
   }
   const resources = await assignmentQueryAll(
-    'SELECT id, filename, filepath, mime_type, size, source_url, uploaded_at FROM assignment_resources WHERE config_id=? ORDER BY uploaded_at DESC, id DESC',
+    'SELECT id, filename, filepath, mime_type, size, source_url, checked_at, uploaded_at FROM assignment_resources WHERE config_id=? ORDER BY uploaded_at DESC, id DESC',
     [configId]
   );
   const classes = await assignmentQueryAll(
@@ -298,13 +417,15 @@ router.put('/config', async (req: Request, res: Response) => {
   if (!assertScope(s, res)) return;
   const configId = await ensureConfig(s);
   await syncAssignmentSnapshotsForScope(s, configId);
-  const existing = await assignmentQueryOne<{ guide_url: string; guide_md: string }>(
-    'SELECT guide_url, guide_md FROM assignment_configs WHERE id=?',
+  const existing = await assignmentQueryOne<{ guide_url: string; guide_md: string; guide_checked_at: string }>(
+    'SELECT guide_url, guide_md, guide_checked_at FROM assignment_configs WHERE id=?',
     [configId]
   );
   const title = `${s.subject} ${s.domainName}`;
   const guideUrl = String(req.body?.guide_url ?? '').trim();
   let guideMd = String(req.body?.guide_md ?? '');
+  let guideCheckedAt = String(existing?.guide_checked_at || '');
+  let guideWarning = '';
   const shouldRefreshGuide = !!guideUrl && (
     guideUrl !== String(existing?.guide_url || '') || req.body?.refresh_guide === true
   );
@@ -312,8 +433,13 @@ router.put('/config', async (req: Request, res: Response) => {
     try {
       githubFetchUrl(guideUrl);
       guideMd = await fetchGithubText(guideUrl);
+      guideCheckedAt = new Date().toLocaleString('sv-SE');
     } catch (error) {
-      return res.status(400).json({ error: error instanceof Error ? error.message : String(error) });
+      if (!existing?.guide_md || guideUrl !== String(existing.guide_url || '')) {
+        return res.status(400).json({ error: error instanceof Error ? error.message : String(error) });
+      }
+      guideMd = existing.guide_md;
+      guideWarning = `GitHub 확인에 실패하여 마지막 저장본을 사용합니다. ${error instanceof Error ? error.message : String(error)}`;
     }
   } else if (guideUrl) {
     guideMd = String(existing?.guide_md || guideMd);
@@ -323,11 +449,11 @@ router.put('/config', async (req: Request, res: Response) => {
   const maxFiles = Math.max(1, Number(req.body?.max_files || 1));
   await assignmentExecute(
     `UPDATE assignment_configs
-     SET title=?, guide_md=?, guide_url=?, allowed_extensions=?, max_file_size_mb=?, max_files=?, updated_at=datetime('now', 'localtime')
+     SET title=?, guide_md=?, guide_url=?, guide_checked_at=?, allowed_extensions=?, max_file_size_mb=?, max_files=?, updated_at=datetime('now', 'localtime')
      WHERE id=?`,
-    [title, guideMd, guideUrl, allowedExtensions, maxFileSizeMb, maxFiles, configId]
+    [title, guideMd, guideUrl, guideCheckedAt, allowedExtensions, maxFileSizeMb, maxFiles, configId]
   );
-  res.json({ ok: true, id: configId });
+  res.json({ ok: true, id: configId, warning: guideWarning });
 });
 
 router.post('/guide-md', upload.single('file'), async (req: Request, res: Response) => {
@@ -339,7 +465,7 @@ router.post('/guide-md', upload.single('file'), async (req: Request, res: Respon
     fs.unlinkSync(req.file.path);
     const configId = await ensureConfig(s);
     await assignmentExecute(
-      `UPDATE assignment_configs SET guide_md=?, guide_url='', updated_at=datetime('now', 'localtime') WHERE id=?`,
+      `UPDATE assignment_configs SET guide_md=?, guide_url='', guide_checked_at='', updated_at=datetime('now', 'localtime') WHERE id=?`,
       [guideMd, configId]
     );
     res.json({ guide_md: guideMd });
@@ -374,34 +500,49 @@ router.post('/resource-links', async (req: Request, res: Response) => {
     githubFetchUrl(sourceUrl);
     const remote = await fetchGithubSource(sourceUrl);
     const filename = String(req.body?.title || '').trim() || remoteFilename(sourceUrl);
+    const filepath = writeResourceCache(filename, remote.buffer);
     const configId = await ensureConfig(s);
-    const inserted = await assignmentExecute(
-      `INSERT INTO assignment_resources(config_id, filename, filepath, mime_type, size, source_url)
-       VALUES(?,?, '', ?, ?, ?)`,
-      [configId, filename, remote.contentType, remote.buffer.length, sourceUrl]
-    );
-    res.json({ id: Number(inserted.lastInsertRowid), filename, source_url: sourceUrl });
+    try {
+      const inserted = await assignmentExecute(
+        `INSERT INTO assignment_resources(config_id, filename, filepath, mime_type, size, source_url, checked_at)
+         VALUES(?,?,?,?,?,?,datetime('now', 'localtime'))`,
+        [configId, filename, filepath, remote.contentType, remote.buffer.length, sourceUrl]
+      );
+      res.json({ id: Number(inserted.lastInsertRowid), filename, source_url: sourceUrl });
+    } catch (error) {
+      try { fs.unlinkSync(resolveStoredPath(filepath)); } catch {}
+      throw error;
+    }
   } catch (error) {
     res.status(400).json({ error: error instanceof Error ? error.message : String(error) });
   }
 });
 
 router.post('/resources/:id/refresh', async (req: Request, res: Response) => {
-  const resource = await assignmentQueryOne<{ id: number; source_url: string }>(
-    'SELECT id, source_url FROM assignment_resources WHERE id=?',
+  const resource = await assignmentQueryOne<{ id: number; filename: string; filepath: string; source_url: string }>(
+    'SELECT id, filename, filepath, source_url FROM assignment_resources WHERE id=?',
     [req.params.id]
   );
   if (!resource?.source_url) return res.status(404).json({ error: '연결된 GitHub 자료를 찾을 수 없습니다.' });
   try {
     const remote = await fetchGithubSource(resource.source_url);
+    const filepath = writeResourceCache(resource.filename, remote.buffer, resource.filepath);
     await assignmentExecute(
       `UPDATE assignment_resources
-       SET mime_type=?, size=?, uploaded_at=datetime('now', 'localtime')
+       SET filepath=?, mime_type=?, size=?, checked_at=datetime('now', 'localtime')
        WHERE id=?`,
-      [remote.contentType, remote.buffer.length, resource.id]
+      [filepath, remote.contentType, remote.buffer.length, resource.id]
     );
     res.json({ ok: true, size: remote.buffer.length, mime_type: remote.contentType });
   } catch (error) {
+    const cached = resource.filepath && fs.existsSync(resolveStoredPath(resource.filepath));
+    if (cached) {
+      return res.json({
+        ok: false,
+        cached: true,
+        warning: `GitHub 확인에 실패하여 마지막 저장본을 사용합니다. ${error instanceof Error ? error.message : String(error)}`,
+      });
+    }
     res.status(502).json({ error: error instanceof Error ? error.message : String(error) });
   }
 });
@@ -414,12 +555,26 @@ router.get('/resources/:id/file', async (req: Request, res: Response) => {
   if (resource?.source_url) {
     try {
       const remote = await fetchGithubSource(resource.source_url);
+      const filepath = writeResourceCache(resource.filename, remote.buffer, resource.filepath);
+      await assignmentExecute(
+        `UPDATE assignment_resources
+         SET filepath=?, mime_type=?, size=?, checked_at=datetime('now', 'localtime')
+         WHERE id=?`,
+        [filepath, remote.contentType, remote.buffer.length, req.params.id]
+      );
       res.setHeader('Cache-Control', 'no-store, max-age=0');
       res.setHeader('Content-Type', previewContentType(resource.filename, remote.contentType));
       res.setHeader('Content-Disposition', `inline; filename*=UTF-8''${encodeURIComponent(resource.filename)}`);
       return res.send(remote.buffer);
     } catch (error) {
-      return res.status(502).json({ error: error instanceof Error ? error.message : String(error) });
+      const cachedPath = resolveStoredPath(resource.filepath);
+      if (!resource.filepath || !fs.existsSync(cachedPath)) {
+        return res.status(502).json({ error: error instanceof Error ? error.message : String(error) });
+      }
+      res.setHeader('X-GitHub-Cache-Fallback', '1');
+      res.setHeader('Content-Type', previewContentType(resource.filename, resource.mime_type));
+      res.setHeader('Content-Disposition', `inline; filename*=UTF-8''${encodeURIComponent(resource.filename)}`);
+      return res.sendFile(path.resolve(cachedPath));
     }
   }
   const filepath = resource ? resolveStoredPath(resource.filepath) : '';

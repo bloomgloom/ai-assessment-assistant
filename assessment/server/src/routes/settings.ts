@@ -18,6 +18,7 @@ import {
   fetchOpenAIModels,
 } from '../services/llm';
 import type { AnthropicEffort, AnthropicOutputOptions, AnthropicOutputTask } from '../services/llm';
+import { deleteAllAssignmentConfigs } from './assignmentConfigs';
 
 const UPLOADS_ROOT = UPLOADS_DIR;
 const router = Router();
@@ -384,6 +385,8 @@ router.post('/reset', async (_req: Request, res: Response) => {
     await execute('DELETE FROM domain_eval');
     await execute('DELETE FROM custom_domains');
     await execute('DELETE FROM criteria_sets');
+    await deleteAllAssignmentConfigs();
+    await assignmentExecute('DELETE FROM assignment_artifacts');
 
     res.json({ ok: true });
   } catch (e: unknown) {

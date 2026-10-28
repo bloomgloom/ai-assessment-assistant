@@ -10,7 +10,7 @@ import MarkdownIt from 'markdown-it';
 import { execute, initDb, queryAll, queryOne, transaction } from './db';
 import { decodeUploadFilename, studentDownloadFilename } from './filename';
 import { fetchGithub, fetchGithubText } from './githubSource';
-import { LOGS_DIR, moveFileToTrash, resolveStoredPath, restoreTrashedFile, RUN_RESOURCES_DIR, SUBMISSIONS_DIR, TEMP_DIR, toStoredPath } from './storage';
+import { ASSIGNMENT_RESOURCES_DIR, LOGS_DIR, moveFileToTrash, resolveStoredPath, restoreTrashedFile, RUN_RESOURCES_DIR, SUBMISSIONS_DIR, TEMP_DIR, toStoredPath } from './storage';
 
 const app = express();
 const teacherApp = express();
@@ -325,20 +325,26 @@ async function prepareRunSnapshot(configId: number) {
   if (!config) throw new Error('평가 실시 설정을 찾을 수 없습니다.');
 
   let guideMd = String(config.guide_md || '');
+  const warnings: string[] = [];
   if (config.guide_url) {
     try {
       guideMd = await fetchGithubText(String(config.guide_url));
       await execute(
-        `UPDATE assignment_configs SET guide_md=?, updated_at=datetime('now', 'localtime') WHERE id=?`,
+        `UPDATE assignment_configs
+         SET guide_md=?, guide_checked_at=datetime('now', 'localtime'), updated_at=datetime('now', 'localtime')
+         WHERE id=?`,
         [guideMd, configId]
       );
     } catch (error) {
-      throw new Error(`GitHub 안내문 최신본을 가져오지 못해 평가를 시작하지 않았습니다. ${error instanceof Error ? error.message : String(error)}`);
+      if (!guideMd) {
+        throw new Error(`GitHub 안내문을 가져오지 못했고 저장본도 없습니다. ${error instanceof Error ? error.message : String(error)}`);
+      }
+      warnings.push(`GitHub 안내문 확인에 실패하여 마지막 저장본을 사용합니다. ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 
   const resources = await queryAll<any>(
-    'SELECT filename, filepath, mime_type, size, source_url FROM assignment_resources WHERE config_id=? ORDER BY uploaded_at, id',
+    'SELECT id, filename, filepath, mime_type, size, source_url, checked_at FROM assignment_resources WHERE config_id=? ORDER BY uploaded_at, id',
     [configId]
   );
   const snapshotDir = path.join(RUN_RESOURCES_DIR, `${Date.now()}_${crypto.randomBytes(6).toString('hex')}`);
@@ -356,11 +362,31 @@ async function prepareRunSnapshot(configId: number) {
         try {
           remote = await fetchGithub(String(resource.source_url));
         } catch (error) {
-          throw new Error(`${filename} 최신본을 가져오지 못했습니다. ${error instanceof Error ? error.message : String(error)}`);
+          const cached = resolveStoredPath(String(resource.filepath || ''));
+          if (!cached || !fs.existsSync(cached)) {
+            throw new Error(`${filename} 최신본을 가져오지 못했고 저장본도 없습니다. ${error instanceof Error ? error.message : String(error)}`);
+          }
+          fs.copyFileSync(cached, target);
+          size = fs.statSync(target).size;
+          warnings.push(`${filename}: GitHub 확인에 실패하여 마지막 저장본을 사용합니다.`);
         }
-        fs.writeFileSync(target, remote.buffer);
-        mimeType = remote.contentType || mimeType;
-        size = remote.buffer.length;
+        if (remote) {
+          fs.writeFileSync(target, remote.buffer);
+          mimeType = remote.contentType || mimeType;
+          size = remote.buffer.length;
+          const existingCache = resolveStoredPath(String(resource.filepath || ''));
+          const cachePath = existingCache || path.join(
+            ASSIGNMENT_RESOURCES_DIR,
+            `${Date.now()}_${crypto.randomBytes(6).toString('hex')}_${safeSegment(filename)}`
+          );
+          fs.writeFileSync(cachePath, remote.buffer);
+          await execute(
+            `UPDATE assignment_resources
+             SET filepath=?, mime_type=?, size=?, checked_at=datetime('now', 'localtime')
+             WHERE id=?`,
+            [toStoredPath(cachePath), mimeType, size, resource.id]
+          );
+        }
       } else {
         const source = resolveStoredPath(String(resource.filepath || ''));
         if (!source || !fs.existsSync(source)) throw new Error(`${filename} 파일을 찾을 수 없습니다.`);
@@ -375,7 +401,7 @@ async function prepareRunSnapshot(configId: number) {
         sourceUrl: String(resource.source_url || ''),
       });
     }
-    return { guideMd, resources: prepared, snapshotDir: resources.length ? snapshotDir : '' };
+    return { guideMd, resources: prepared, snapshotDir: resources.length ? snapshotDir : '', warnings };
   } catch (error) {
     try { if (fs.existsSync(snapshotDir)) fs.rmSync(snapshotDir, { recursive: true, force: true }); } catch {}
     throw error;
@@ -384,8 +410,11 @@ async function prepareRunSnapshot(configId: number) {
 
 async function currentOpenRun() {
   return queryOne<any>(
-    `SELECT cfg.*, run.id AS id, run.config_id, run.assignment_class_id, run.share_code,
+    `SELECT run.id, run.config_id, run.assignment_class_id, run.share_code,
             run.viewer_code, run.is_open, run.started_at, run.ended_at, run.guide_md_snapshot,
+            cfg.year, cfg.semester, cfg.grade, cfg.subject, cfg.domain_name, cfg.title,
+            cfg.guide_md, cfg.guide_url, cfg.allowed_extensions,
+            cfg.max_file_size_mb, cfg.max_files, cfg.updated_at,
             ac.id AS ac_id, ac.room
      FROM assignment_runs run
      JOIN assignment_configs cfg ON cfg.id=run.config_id
@@ -398,8 +427,11 @@ async function currentOpenRun() {
 
 async function runByShareCode(shareCode: string) {
   return queryOne<any>(
-    `SELECT cfg.*, run.id AS id, run.config_id, run.assignment_class_id, run.share_code,
+    `SELECT run.id, run.config_id, run.assignment_class_id, run.share_code,
             run.viewer_code, run.is_open, run.started_at, run.ended_at, run.guide_md_snapshot,
+            cfg.year, cfg.semester, cfg.grade, cfg.subject, cfg.domain_name, cfg.title,
+            cfg.guide_md, cfg.guide_url, cfg.allowed_extensions,
+            cfg.max_file_size_mb, cfg.max_files, cfg.updated_at,
             ac.id AS ac_id, ac.room
      FROM assignment_runs run
      JOIN assignment_configs cfg ON cfg.id=run.config_id
@@ -427,7 +459,7 @@ async function renderStudentPage(run: any, submitPath: string, res: any) {
  <section class="card"><h2>안내</h2><div class="guide">${markdown(run.guide_md_snapshot)}</div></section>
  <div class="stack">
   ${markdownDocuments}
-  <section class="card"><h2>배부 자료</h2><div class="resource-list">${otherResources.map(r=>`<a class="resource-card" href="/api/public/run-resources/${r.id}/file" target="_blank" rel="noopener"><span class="resource-name">${escapeHtml(r.filename)}</span><span class="resource-action">열기</span></a>`).join('') || (markdownResources.length ? '<p class="muted">위 자료가 평가 실시 시점의 저장본입니다.</p>' : '<p class="muted">자료 없음</p>')}</div></section>
+  <section class="card"><h2>배부 자료</h2><div class="resource-list">${otherResources.map(r=>`<a class="resource-card" href="/api/public/run-resources/${r.id}/file" download><span class="resource-name">${escapeHtml(r.filename)}</span><span class="resource-action">다운로드</span></a>`).join('') || (markdownResources.length ? '<p class="muted">위 자료가 평가 실시 시점의 저장본입니다.</p>' : '<p class="muted">자료 없음</p>')}</div></section>
   <section class="card"><h2>제출</h2><form id="f" class="student-form"><div id="fileSection"><label>파일</label><div id="uploadGroups" class="file-list"></div></div><label class="no-file-option"><input id="noFile" name="noFile" type="checkbox" value="1"><span>파일 미제출</span></label><button>제출</button></form><p id="msg"></p></section>
  </div>
 </main>
@@ -548,7 +580,7 @@ app.get(['/', '/admin'], requireLocal, (_req, res) => {
 const yearSel=document.querySelector('#year'), semesterSel=document.querySelector('#semester'), gradeSel=document.querySelector('#grade'), subjectSel=document.querySelector('#subject'), domainSel=document.querySelector('#domain'), classSel=document.querySelector('#class');
 const teacherBase='${ips[0] || '127.0.0.1'}:${TEACHER_PORT}';
 const studentBase='${ips[0] || '127.0.0.1'}:${STUDENT_PORT}';
-let configs=[], classes=[], currentRun=null, suppressRoster=false, rosterRows=[];
+let configs=[], classes=[], currentRun=null, suppressRoster=false, rosterRows=[], runActionPending=false;
 async function j(url,opt){const r=await fetch(url,opt);if(!r.ok)throw new Error(await r.text());return r.json();}
 function unique(rows,key){return [...new Set(rows.map(r=>r[key]))].sort((a,b)=>String(a).localeCompare(String(b),'ko',{numeric:true}));}
 function selectedConfig(){return configs.find(c=>String(c.year)===yearSel.value&&String(c.semester)===semesterSel.value&&String(c.grade)===gradeSel.value&&c.subject===subjectSel.value&&c.domain_name===domainSel.value);}
@@ -627,10 +659,31 @@ async function startRun(body){
   data=await response.json().catch(()=>({error:'평가를 시작하지 못했습니다.'}));
  }
  if(!response.ok)throw new Error(data.error||'평가를 시작하지 못했습니다.');
+ if(Array.isArray(data.warnings)&&data.warnings.length)alert(data.warnings.join('\\n'));
  return true;
 }
 yearSel.onchange=()=>{suppressRoster=false;refreshSemester(false);loadClasses();}; semesterSel.onchange=()=>{suppressRoster=false;refreshGrade(false);loadClasses();}; gradeSel.onchange=()=>{suppressRoster=false;refreshSubject(false);loadClasses();}; subjectSel.onchange=()=>{suppressRoster=false;refreshDomain(false);loadClasses();}; domainSel.onchange=()=>{suppressRoster=false;loadClasses();}; classSel.onchange=()=>{suppressRoster=false;loadClassRoster();}; sort.onchange=loadSubs; absentOnly.onchange=loadSubs;
-runToggle.onclick=async()=>{ try{if(currentRun){await j('/api/admin/runs/'+currentRun.id+'/end',{method:'POST'});currentRun=null;suppressRoster=false;updateLinks(null);await loadClassRoster();return;}const cfg=selectedConfig();if(!cfg||!classSel.value)return;const studentIds=visibleRows(rosterRows).map(s=>Number(s.id));if(!studentIds.length)return;suppressRoster=false;if(await startRun({configId:Number(cfg.id),assignmentClassId:Number(classSel.value),studentIds}))await loadRuns();}catch(error){alert(error.message||String(error));} };
+runToggle.onclick=async()=>{
+ if(runActionPending)return;
+ runActionPending=true;
+ runToggle.disabled=true;
+ runToggle.textContent=currentRun?'종료 중...':'확인 중...';
+ try{
+  if(currentRun){await j('/api/admin/runs/'+currentRun.id+'/end',{method:'POST'});currentRun=null;suppressRoster=false;updateLinks(null);await loadClassRoster();return;}
+  const cfg=selectedConfig();
+  if(!cfg||!classSel.value)return;
+  const studentIds=visibleRows(rosterRows).map(s=>Number(s.id));
+  if(!studentIds.length)return;
+  suppressRoster=false;
+  if(await startRun({configId:Number(cfg.id),assignmentClassId:Number(classSel.value),studentIds}))await loadRuns();
+ }catch(error){
+  alert(error.message||String(error));
+ }finally{
+  runActionPending=false;
+  runToggle.disabled=false;
+  updateLinks(currentRun);
+ }
+};
 setInterval(loadSubs,3000); load();
 </script>`));
 });
@@ -719,19 +772,6 @@ teacherApp.post('/auth', async (req, res) => {
 
 app.get('/api/admin/configs', requireLocal, async (_req, res) => {
   const configs = await queryAll<any>('SELECT * FROM assignment_configs ORDER BY year, semester, grade, subject, domain_name');
-  await Promise.all(configs.map(async (config) => {
-    if (!config.guide_url) return;
-    try {
-      const latestGuide = await fetchGithubText(String(config.guide_url));
-      await execute(
-        `UPDATE assignment_configs SET guide_md=?, updated_at=datetime('now', 'localtime') WHERE id=?`,
-        [latestGuide, config.id]
-      );
-      config.guide_md = latestGuide;
-    } catch (error) {
-      config.guide_fetch_error = error instanceof Error ? error.message : String(error);
-    }
-  }));
   res.json(configs);
 });
 
@@ -975,7 +1015,7 @@ app.post('/api/admin/runs', requireLocal, async (req, res) => {
     } catch (logError) {
       console.error('Failed to write assignment start log:', logError);
     }
-    return res.json({ id: runId, share_code: share, viewer_code: viewer, target_student_count: students.length });
+    return res.json({ id: runId, share_code: share, viewer_code: viewer, target_student_count: students.length, warnings: snapshot.warnings });
   } catch (error) {
     try { if (snapshot.snapshotDir && fs.existsSync(snapshot.snapshotDir)) fs.rmSync(snapshot.snapshotDir, { recursive: true, force: true }); } catch {}
     for (const moved of movedFiles.reverse()) {
@@ -997,7 +1037,7 @@ async function sendRunResource(req: any, res: any) {
   if (!resource || !filepath || !fs.existsSync(filepath)) return res.status(404).send('자료를 찾을 수 없습니다.');
   res.setHeader('Cache-Control', 'private, no-store');
   res.setHeader('Content-Type', inlineContentType(resource.filename, resource.mime_type));
-  res.setHeader('Content-Disposition', `inline; filename*=UTF-8''${encodeURIComponent(resource.filename)}`);
+  res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(resource.filename)}`);
   res.sendFile(path.resolve(filepath));
 }
 

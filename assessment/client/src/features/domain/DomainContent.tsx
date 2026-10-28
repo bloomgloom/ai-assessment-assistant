@@ -993,6 +993,9 @@ export function DomainContent({
                   최신 안내문을 불러오지 못했습니다: {assignmentConfig.guide_fetch_error}
                 </div>
               )}
+              <div className="mb-2 text-[11px] text-gray-400">
+                확인 일시: {formatRunTime(assignmentConfig?.guide_checked_at || assignmentConfig?.updated_at || '')}
+              </div>
               {assignmentLoading ? (
                 <div className="flex h-[42rem] items-center justify-center rounded-md border border-gray-200 bg-gray-50 text-gray-400">
                   <Loader2 size={20} className="animate-spin" />
@@ -1066,7 +1069,10 @@ export function DomainContent({
                     <div key={resource.id} className="rounded-md border border-gray-200 bg-gray-50 p-2">
                       <div className="truncate text-xs font-medium text-gray-800" title={resource.filename}>{resource.filename}</div>
                       <div className="mt-1 flex items-center justify-between gap-2 text-[11px] text-gray-500">
-                        <span>{resource.source_url ? 'GitHub 최신본' : formatBytes(Number(resource.size))}</span>
+                        <div>
+                          <div>{resource.source_url ? 'GitHub 저장본' : formatBytes(Number(resource.size))}</div>
+                          <div className="text-[10px] text-gray-400">확인 일시: {formatRunTime(resource.checked_at || resource.uploaded_at || '')}</div>
+                        </div>
                         <div className="flex gap-1">
                           <button
                             className="inline-flex h-7 w-7 items-center justify-center rounded border border-gray-200 bg-white text-gray-600 hover:bg-gray-50"
