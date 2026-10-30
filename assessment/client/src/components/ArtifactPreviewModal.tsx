@@ -121,7 +121,7 @@ export function ArtifactPreviewStandalonePage() {
   const [searchParams] = useSearchParams();
   const filename = searchParams.get('filename') || '';
   const artifact = useMemo<PreviewArtifact | null>(() => {
-    if (!filename || !id || !['artifact', 'assignment', 'resource'].includes(source || '')) return null;
+    if (!filename || !id || !['artifact', 'assignment', 'resource', 'activity'].includes(source || '')) return null;
     return {
       id: Number(id),
       filename,

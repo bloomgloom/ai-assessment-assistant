@@ -27,6 +27,7 @@ export const TEMPERATURE_TASKS = [
 
 export const ANTHROPIC_OUTPUT_TASKS = [
   { key: 'domainManagement', label: '평가 영역 관리' },
+  { key: 'activity', label: '활동' },
   { key: 'recordsScoring', label: '채점' },
   { key: 'recordsComments', label: '기록' },
   { key: 'subjectComprehensive', label: '세특' },

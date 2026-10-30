@@ -9,6 +9,8 @@ import { assignmentExecute, assignmentQueryAll, assignmentQueryOne } from '../se
 import { assignmentArtifactsForStudent } from '../services/assignmentArtifacts';
 import { UPLOADS_DIR, ensureDir, moveFileToTrash, resolveStoredPath, restoreTrashedFile, toStoredPath } from '../services/storage';
 import { decodeUploadFilename } from '../services/filename';
+import { entriesFromImportSource, entryFilename } from '../services/importEntries';
+import { ArtifactImportService } from '../services/artifactImportService';
 
 const router = Router();
 
@@ -58,42 +60,6 @@ function uniqueArtifactPath(baseDir: string, filename: string, index: number): s
   const candidate = path.join(baseDir, `${Date.now()}_${index}_${normalizedName}`);
   if (!fs.existsSync(candidate)) return candidate;
   return path.join(baseDir, `${Date.now()}_${index}_${Math.random().toString(36).slice(2, 8)}_${normalizedName}`);
-}
-
-/**
- * ZIP 내부 파일의 전체 상대 경로에서 "5자리 학번 + 이름" 패턴을 찾아
- * 학번·이름 모두 일치하는 학생을 반환한다.
- * - 파일명이나 상위 폴더 어디에 있어도 허용
- * - 학번은 5자리 숫자이며, 이름보다 앞에 있어야 함
- * - 이름은 2~5자 학생명만 대상으로 함
- * - 순서는 반드시 학번 → 이름 순
- */
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
-function matchStudentsByPath(
-  decodedPath: string,
-  students: { id: number; student_num: number; name: string }[]
-): { id: number; student_num: number; name: string }[] {
-  const normalizedPath = decodedPath.normalize('NFC');
-  const candidates = [...students]
-    .filter(student => student.name.length >= 2 && student.name.length <= 5)
-    .sort((a, b) => b.name.length - a.name.length);
-
-  return candidates.filter(student => {
-    const numberPattern = new RegExp(`(?<![0-9])${student.student_num}(?![0-9])`, 'g');
-    const namePattern = new RegExp(escapeRegExp(student.name), 'g');
-
-    const numberPositions = [...normalizedPath.matchAll(numberPattern)].map(match => match.index ?? -1);
-    if (numberPositions.length === 0) return false;
-
-    for (const nameMatch of normalizedPath.matchAll(namePattern)) {
-      const nameIndex = nameMatch.index ?? -1;
-      if (numberPositions.some(numberIndex => numberIndex >= 0 && numberIndex < nameIndex)) return true;
-    }
-    return false;
-  });
 }
 
 async function deleteArtifactRows(rows: { id: number; filepath: string }[]): Promise<void> {
@@ -365,9 +331,10 @@ router.get('/student/:studentId/domain/:domain', async (req: Request, res: Respo
   res.json(await assignmentArtifactsForStudent(req.params.studentId, req.params.domain));
 });
 
-// ── 일괄 ZIP 업로드 ────────────────────────────────────────────────────────────
+// ── 일괄 산출물 업로드 (ZIP 또는 폴더) ─────────────────────────────────────────
 router.post('/bulk-upload/:classId', upload.single('file'), async (req: Request, res: Response) => {
-  if (!req.file) return res.status(400).json({ error: '파일이 업로드되지 않았습니다.' });
+  const folderPath = String(req.body.folderPath || '');
+  if (!req.file && !folderPath) return res.status(400).json({ error: 'ZIP 파일 또는 폴더가 필요합니다.' });
   const { classId } = req.params;
   const domain = req.body.domain || '';
 
@@ -381,6 +348,7 @@ router.post('/bulk-upload/:classId', upload.single('file'), async (req: Request,
       'SELECT id, student_num, name FROM class_students WHERE class_id=?', [classId]
     );
 
+    const importEntries = await entriesFromImportSource({ zipPath: req.file?.path, folderPath });
     const baseUploadDir = path.join(
       UPLOAD_DIR, String(cls.year), String(cls.semester), String(cls.grade), cls.subject, cls.room, domain
     );
@@ -390,104 +358,41 @@ router.post('/bulk-upload/:classId', upload.single('file'), async (req: Request,
     fs.mkdirSync(baseUploadDir, { recursive: true });
 
     let count = 0;
-    const sampleFilenames: string[] = [];
-    let fileEntryCount = 0;
-    const matchedStudentIds = new Set<number>();
-    const results: Array<{
-      path: string;
-      status: 'uploaded' | 'unmatched' | 'conflict' | 'read_error';
-      studentId?: number;
-      student?: string;
-      reason?: string;
-    }> = [];
+    const sampleFilenames = importEntries.map(entryFilename).filter(filename => filename && !filename.startsWith('.')).slice(0, 5);
+    const importer = new ArtifactImportService(students, {
+      include: (_entry, filename) => !filename.startsWith('.'),
+      studentResult: student => ({ studentId: student.id, student: `${student.student_num}${student.name}` }),
+      resolve: async () => ({ kind: 'read' as const, target: undefined }),
+      store: async context => {
+        const decodedName = context.path.split(/[/\\]/).pop() || context.filename.normalize('NFC');
+        const fileExt = path.extname(decodedName).toLowerCase();
+        const savePath = path.join(baseUploadDir, `${Date.now()}_${count}_${decodedName}`);
+        fs.writeFileSync(savePath, context.buffer);
+        const ct = TEXT_CONTENT_TYPES[fileExt] || '';
+        await assignmentExecute(
+          `INSERT INTO assignment_artifacts(assessment_student_id, domain, filename, filepath,mime_type,size)
+           VALUES(?,?,?,?,?,?)`,
+          [context.student.id, domain, decodedName, toStoredPath(savePath), ct, context.buffer.length]
+        );
+        count += 1;
+        return { path: context.path, status: 'uploaded' as const, studentId: context.student.id, student: `${context.student.student_num}${context.student.name}`, filename: decodedName };
+      },
+    });
+    const imported = await importer.run(importEntries);
+    const results = imported.results;
 
-    const directory = await unzipper.Open.file(req.file.path);
-
-    for (const entry of directory.files) {
-      if (entry.type === 'Directory') continue;
-
-      const fullPath = entry.path;
-
-      // __MACOSX, 숨김파일 필터 (경로 전체 기준)
-      if (fullPath.includes('__MACOSX') || fullPath.split('/').some(p => p.startsWith('.'))) continue;
-
-      // Windows 백슬래시 대응
-      const rawFileName = fullPath.split(/[/\\]/).pop() || '';
-      if (!rawFileName || rawFileName.startsWith('.')) continue;
-
-      fileEntryCount++;
-      if (sampleFilenames.length < 5) sampleFilenames.push(rawFileName);
-
-      // 전체 상대 경로의 인코딩을 복원한 뒤 폴더와 파일명을 함께 검사한다.
-      let decodedPath = fullPath.normalize('NFC');
-      if (decodedPath.includes('\uFFFD')) {
-        try { decodedPath = Buffer.from(fullPath, 'latin1').toString('utf8').normalize('NFC'); } catch {}
-      }
-      const decodedName = decodedPath.split(/[/\\]/).pop() || rawFileName.normalize('NFC');
-
-      const matchedStudents = matchStudentsByPath(decodedPath, students);
-      if (matchedStudents.length === 0) {
-        results.push({ path: decodedPath, status: 'unmatched', reason: '경로에서 학번·이름을 찾지 못했습니다.' });
-        continue;
-      }
-      if (matchedStudents.length > 1) {
-        results.push({
-          path: decodedPath,
-          status: 'conflict',
-          reason: `여러 학생과 일치: ${matchedStudents.map(student => `${student.student_num}${student.name}`).join(', ')}`,
-        });
-        continue;
-      }
-      const student = matchedStudents[0];
-
-      // 파일 내용 읽기
-      let fileBuffer: Buffer;
-      try {
-        fileBuffer = await entry.buffer();
-      } catch (e) {
-        console.error(`항목 읽기 실패, 건너뜀: ${fullPath}`, e);
-        results.push({
-          path: decodedPath,
-          status: 'read_error',
-          studentId: student.id,
-          student: `${student.student_num}${student.name}`,
-          reason: '파일을 읽지 못했습니다.',
-        });
-        continue;
-      }
-
-      const fileExt = path.extname(decodedName).toLowerCase();
-
-      const savePath = path.join(baseUploadDir, `${Date.now()}_${count}_${decodedName}`);
-      fs.writeFileSync(savePath, fileBuffer);
-      const ct = TEXT_CONTENT_TYPES[fileExt] || '';
-      await assignmentExecute(
-        `INSERT INTO assignment_artifacts(assessment_student_id, domain, filename, filepath, mime_type, size)
-         VALUES(?,?,?,?,?,?)`,
-        [student.id, domain, decodedName, toStoredPath(savePath), ct, fileBuffer.length]
-      );
-      count++;
-      matchedStudentIds.add(student.id);
-      results.push({
-        path: decodedPath,
-        status: 'uploaded',
-        studentId: student.id,
-        student: `${student.student_num}${student.name}`,
-      });
-    }
-
-    fs.unlinkSync(req.file.path);
+    if (req.file) fs.unlinkSync(req.file.path);
 
     let message = `총 ${count}개의 산출물 파일이 성공적으로 연동되었습니다.`;
-    if (count === 0 && fileEntryCount > 0) {
-      message += ` (ZIP에서 ${fileEntryCount}개 파일 발견, DB 학생 ${students.length}명과 매칭 없음. 파일 경로에 "학번(5자리)+이름" 패턴이 있어야 합니다. 파일명 예시: ${sampleFilenames.join(', ')})`;
+    if (count === 0 && imported.total > 0) {
+      message += ` (선택 항목에서 ${imported.total}개 파일 발견, DB 학생 ${students.length}명과 매칭 없음. 파일 경로에 "학번(5자리)+이름" 패턴이 있어야 합니다. 파일명 예시: ${sampleFilenames.join(', ')})`;
     }
 
     res.json({
       message,
       count,
-      total: fileEntryCount,
-      studentCount: matchedStudentIds.size,
+      total: imported.total,
+      studentCount: new Set(results.filter(result => result.status === 'uploaded').map(result => result.studentId)).size,
       unmatchedCount: results.filter(result => result.status === 'unmatched').length,
       conflictCount: results.filter(result => result.status === 'conflict').length,
       errorCount: results.filter(result => result.status === 'read_error').length,

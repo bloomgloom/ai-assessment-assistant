@@ -1,6 +1,6 @@
 import { lazy, Suspense } from 'react';
 import { File, Loader2 } from 'lucide-react';
-import { artifactsApi, assignmentConfigsApi } from '../lib/api';
+import { activityApi, artifactsApi, assignmentConfigsApi } from '../lib/api';
 import { downloadUrl } from '../lib/desktopFiles';
 
 const CodeArtifactPreview = lazy(() => import('./preview/CodeArtifactPreview'));
@@ -14,7 +14,7 @@ export interface PreviewArtifact {
   id: number;
   filename: string;
   filepath?: string;
-  source?: 'artifact' | 'assignment' | 'resource';
+  source?: 'artifact' | 'assignment' | 'resource' | 'activity';
 }
 
 interface ArtifactPreviewContentProps {
@@ -48,6 +48,7 @@ function PreviewFallback() {
 export function artifactFileUrl(artifact: PreviewArtifact) {
   if (artifact.source === 'assignment') return assignmentConfigsApi.submissionFileUrl(artifact.id);
   if (artifact.source === 'resource') return assignmentConfigsApi.resourceFileUrl(artifact.id);
+  if (artifact.source === 'activity') return activityApi.fileUrl(artifact.id);
   return artifactsApi.fileUrl(artifact.id);
 }
 

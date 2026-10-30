@@ -166,12 +166,17 @@ router.get('/subjects', async (req: Request, res: Response) => {
        FROM subject_domains WHERE year=? AND semester=? AND grade=? AND subject=? AND sort_order >= 0`,
       [sub.year, sub.semester, sub.grade, sub.subject]
     );
-
+    const lessonSource = await queryOne<{ source_filename: string; source_filepath: string; excel_path: string }>(
+      `SELECT source_filename,source_filepath,excel_path FROM subject_plan_settings
+       WHERE year=? AND semester=? AND grade=? AND subject=?`,
+      [sub.year, sub.semester, sub.grade, sub.subject]
+    );
     result.push({
       ...sub,
       fixedDomains,
       customDomains,
       has_source: Number(hasSourceRow?.has_source ?? 0),
+      has_lesson_source: lessonSource && (lessonSource.source_filename || lessonSource.source_filepath || lessonSource.excel_path) ? 1 : 0,
     });
   }
   res.json(result);

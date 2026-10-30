@@ -1,5 +1,5 @@
 import { lazy, Suspense, useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { recordsApi, criteriaApi, classesApi, aiApi, settingsApi } from '../../lib/api';
+import { recordsApi, criteriaApi, classesApi, aiApi, settingsApi, activityApi } from '../../lib/api';
 import { useAiBatchStore } from '../../stores/aiBatchStore';
 import { useRecordsUnsavedStore } from '../../stores/recordsUnsavedStore';
 import { Loader2, PanelLeftClose, PanelLeftOpen, Trash2 } from 'lucide-react';
@@ -13,15 +13,13 @@ import { useRecordsUpload } from './useRecordsUpload';
 import { saveBlob } from '../../lib/desktopFiles';
 import { diffChars, type Change } from 'diff';
 import { StableTextarea } from '../../components/common/StableTextarea';
+import { BulkImportResultDialog } from '../../components/common/BulkImportResultDialog';
+import { useResizableTable } from '../../components/common/useResizableTable';
+import { RecordsFrozenHeader, RecordsFrozenStudentCells, recordsFrozenLayout } from '../../components/common/RecordsTableFrozenColumns';
+import { ClaudeBatchResultsDialog, type ClaudeBatchResultJob } from '../../components/common/ClaudeBatchResultsDialog';
 
 const ArtifactViewer = lazy(() => import('../../components/ArtifactViewer'));
 
-const FROZEN_DEFAULT_WIDTHS = {
-  chk: 32,
-  cls: 32,
-  num: 40,
-  name: 64,
-};
 const RECORD_TEXTAREA_MIN_HEIGHT = 80;
 
 function getDomainColumnDefaultWidth(type: string) {
@@ -148,6 +146,7 @@ export function useRecordsPage() {
   const [writtenExams, setWrittenExams] = useState<WrittenExam[]>([]);
   const [writtenScores, setWrittenScores] = useState<Record<string, string>>({});
   const [savedWrittenScores, setSavedWrittenScores] = useState<Record<string, string>>({});
+  const [activitySummaries, setActivitySummaries] = useState<Record<number, string>>({});
 
   const [saving, setSaving] = useState(false);
   const [uploadingZip, setUploadingZip] = useState(false);
@@ -165,6 +164,7 @@ export function useRecordsPage() {
   const [selectedStudentIds, setSelectedStudentIds] = useState<Set<number>>(new Set());
   const [deleting, setDeleting] = useState(false);
   const [showClaudeBatchDialog, setShowClaudeBatchDialog] = useState(false);
+  const [receivingClaudeBatchId, setReceivingClaudeBatchId] = useState('');
   const [bulkZipResult, setBulkZipResult] = useState<BulkZipUploadResult | null>(null);
 
   const [showGuide, setShowGuide] = useState(() => localStorage.getItem(RECORDS_GUIDE_KEY) !== '1');
@@ -172,12 +172,16 @@ export function useRecordsPage() {
   const spellcheckAbortRef = useRef<AbortController | null>(null);
   const recordsRestoredRef = useRef(false);
 
-  const fileInputRef = useRef<HTMLInputElement>(null);
   const fullRecordsInputRef = useRef<HTMLInputElement>(null);
-  const tableRef = useRef<HTMLTableElement>(null);
   const spellcheckHighlightRefs = useRef<Record<number, HTMLDivElement | null>>({});
-  const [colWidths, setColWidths] = useState<Record<string, number>>({});
-  const [rowTextareaHeights, setRowTextareaHeights] = useState<Record<number, number>>({});
+  const {
+    tableRef,
+    columnWidths: colWidths,
+    rowHeights: rowTextareaHeights,
+    handleColumnResizeStart: handleResizeStart,
+    renderCellResizeHandles,
+    handleKeyNavigation: handleKeyNav,
+  } = useResizableTable<number>({ defaultRowHeight: RECORD_TEXTAREA_MIN_HEIGHT });
   const aiBatchJob = useAiBatchStore(state => state.currentJob);
   const claudeBatchJobs = useAiBatchStore(state => state.claudeBatchJobs);
   const aiBatchUpdates = useAiBatchStore(state => state.updates);
@@ -197,15 +201,6 @@ export function useRecordsPage() {
       || stableContentStringify(writtenScores) !== stableContentStringify(savedWrittenScores),
     [contents, savedContents, writtenScores, savedWrittenScores]
   );
-  const bulkZipStudentRows = useMemo(() => students.map(student => ({
-    student,
-    results: bulkZipResult?.results.filter(result => result.studentId === student.id) || [],
-  })), [students, bulkZipResult]);
-  const bulkZipUnassignedResults = useMemo(
-    () => bulkZipResult?.results.filter(result => result.studentId == null) || [],
-    [bulkZipResult]
-  );
-
   useEffect(() => {
     let cancelled = false;
     settingsApi.get()
@@ -223,7 +218,7 @@ export function useRecordsPage() {
   const classClaudeBatchJobs = useMemo(
     () => selectedClass
       ? claudeBatchJobs
-        .filter((job) => job.classId === selectedClass.id)
+        .filter((job) => job.classId === selectedClass.id && String(job.contentType) !== 'activity')
         .sort((a, b) => a.startedAt - b.startedAt)
       : [],
     [claudeBatchJobs, selectedClass]
@@ -249,114 +244,6 @@ export function useRecordsPage() {
     window.addEventListener('beforeunload', handler);
     return () => window.removeEventListener('beforeunload', handler);
   }, [isDirty]);
-
-  // ── Column resize ──────────────────────────────────────────────────────────
-  const handleResizeStart = (e: React.MouseEvent, key: string, defW: number) => {
-    e.preventDefault();
-    e.stopPropagation();
-    const sx = e.clientX;
-    const sw = colWidths[key] ?? defW;
-    const minWidth = key.startsWith('_') ? 24 : 30;
-    const onMove = (mv: MouseEvent) =>
-      setColWidths(p => ({ ...p, [key]: Math.max(minWidth, sw + mv.clientX - sx) }));
-    const onUp = () => {
-      document.removeEventListener('mousemove', onMove);
-      document.removeEventListener('mouseup', onUp);
-    };
-    document.addEventListener('mousemove', onMove);
-    document.addEventListener('mouseup', onUp);
-  };
-
-  const handleRowResizeStart = (e: React.MouseEvent, studentId: number) => {
-    e.preventDefault();
-    e.stopPropagation();
-    const sy = e.clientY;
-    const sh = rowTextareaHeights[studentId] ?? RECORD_TEXTAREA_MIN_HEIGHT;
-    const onMove = (mv: MouseEvent) =>
-      setRowTextareaHeights(p => ({
-        ...p,
-        [studentId]: Math.max(RECORD_TEXTAREA_MIN_HEIGHT, sh + mv.clientY - sy),
-      }));
-    const onUp = () => {
-      document.removeEventListener('mousemove', onMove);
-      document.removeEventListener('mouseup', onUp);
-    };
-    document.addEventListener('mousemove', onMove);
-    document.addEventListener('mouseup', onUp);
-  };
-
-  const handleRowAutoFit = (e: React.MouseEvent, studentId: number) => {
-    e.preventDefault();
-    e.stopPropagation();
-
-    const cell = e.currentTarget.closest('td');
-    const textarea = cell?.querySelector<HTMLTextAreaElement>('textarea');
-    if (!textarea) return;
-
-    const previousHeight = textarea.style.height;
-    textarea.style.height = 'auto';
-    const borderHeight = textarea.offsetHeight - textarea.clientHeight;
-    const fittedHeight = Math.max(RECORD_TEXTAREA_MIN_HEIGHT, textarea.scrollHeight + borderHeight);
-    textarea.style.height = previousHeight;
-
-    setRowTextareaHeights(p => ({ ...p, [studentId]: fittedHeight }));
-  };
-
-  const renderRowResizeHandle = (studentId: number) => (
-    <div
-      className="records-table-row-resize-handle absolute inset-x-0 bottom-0 z-10 cursor-row-resize bg-transparent"
-      onMouseDown={e => handleRowResizeStart(e, studentId)}
-      onDoubleClick={e => handleRowAutoFit(e, studentId)}
-      title="드래그하여 행 높이 조절 · 더블클릭하여 이 셀 내용에 맞춤"
-    />
-  );
-
-  const renderColumnResizeHandle = (key: string, defW: number) => (
-    <div
-      className="records-table-column-resize-handle absolute bottom-0 right-0 top-0 z-10 cursor-col-resize bg-transparent"
-      onMouseDown={e => handleResizeStart(e, key, defW)}
-      title="드래그하여 열 너비 조절"
-    />
-  );
-
-  const renderCellResizeHandles = (studentId: number, colKey: string, defW: number) => (
-    <>
-      {renderColumnResizeHandle(colKey, defW)}
-      {renderRowResizeHandle(studentId)}
-    </>
-  );
-
-  // ── Keyboard navigation ────────────────────────────────────────────────────
-  const handleKeyNav = (e: React.KeyboardEvent, ri: number, ci: number) => {
-    if (e.key !== 'Tab' && e.key !== 'Enter') return;
-
-    const cells = Array.from(
-      tableRef.current?.querySelectorAll<HTMLElement>('[data-row][data-col]:not(:disabled)') ?? []
-    ).sort((a, b) => {
-      const ar = Number(a.dataset.row ?? 0);
-      const br = Number(b.dataset.row ?? 0);
-      if (ar !== br) return ar - br;
-      return Number(a.dataset.col ?? 0) - Number(b.dataset.col ?? 0);
-    });
-    if (!cells.length) return;
-
-    let target: HTMLElement | undefined;
-    if (e.key === 'Tab') {
-      const currentIndex = cells.findIndex(cell => Number(cell.dataset.row) === ri && Number(cell.dataset.col) === ci);
-      if (currentIndex < 0) return;
-      target = cells[currentIndex + (e.shiftKey ? -1 : 1)];
-    } else {
-      const direction = e.shiftKey ? -1 : 1;
-      const sameColumnCells = cells.filter(cell => Number(cell.dataset.col) === ci);
-      target = direction > 0
-        ? sameColumnCells.find(cell => Number(cell.dataset.row) > ri)
-        : sameColumnCells.reverse().find(cell => Number(cell.dataset.row) < ri);
-    }
-
-    if (!target) return;
-    e.preventDefault();
-    target.focus();
-  };
 
   const loadData = useCallback(async () => {
     const [cr, sr] = await Promise.all([classesApi.getAll(), criteriaApi.getSubjects()]);
@@ -424,9 +311,10 @@ export function useRecordsPage() {
     setCommentsItemsMap(siMap);
 
     // Load all content
-    const [cr, wr] = await Promise.all([
+    const [cr, wr, ar] = await Promise.all([
       fetch(`/api/records/classes/${c.id}/content`),
       recordsApi.getWrittenExams(c.id),
+      activityApi.getSemesterSummaries(c.id),
     ]);
     const cData = await cr.json() as ContentItem[];
     const map: Record<string, any> = {};
@@ -441,6 +329,7 @@ export function useRecordsPage() {
     setWrittenExams(writtenData.exams || []);
     setWrittenScores(writtenScoreMap);
     setSavedWrittenScores(writtenScoreMap);
+    setActivitySummaries(Object.fromEntries((ar.data || []).map((item: any) => [Number(item.student_id), String(item.summary || '')])));
     setContents(map);
     setSavedContents(map);
     setSpellcheckDiffs({});
@@ -1175,13 +1064,13 @@ export function useRecordsPage() {
   };
 
   const handleCheckClaudeBatchResults = async (jobId: string) => {
-    setShowClaudeBatchDialog(false);
+    setReceivingClaudeBatchId(jobId);
     try {
       const done = await checkClaudeBatchResults(jobId);
       if (!done) alert('Claude 배치가 아직 서버에서 진행 중입니다.');
     } catch {
       alert('배치 결과 확인에 실패했습니다. 잠시 후 다시 시도해 주세요.');
-    }
+    } finally { setReceivingClaudeBatchId(''); }
   };
 
   const batchKindLabel = (type: 'scoring' | 'comments' | 'combined' | 'spellcheck', domains: string[]) => {
@@ -1197,23 +1086,12 @@ export function useRecordsPage() {
     return domain === SUBJECT_COMPREHENSIVE_DOMAIN ? '세특' : domain;
   };
 
-  const batchStartedAtLabel = (startedAt: number) => {
-    if (!startedAt) return '-';
-    return new Date(startedAt).toLocaleString('ko-KR', {
-      month: '2-digit',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit',
-    });
-  };
-
-  const handleBulkZipUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (!selectedClass || domainFilter === 'all' || !e.target.files?.length) return;
-    const file = e.target.files[0];
-
+  const handleBulkArtifactUpload = async ({ file, folderPath }: { file?: File; folderPath?: string }) => {
+    if (!selectedClass || domainFilter === 'all' || (!file && !folderPath)) return;
     setUploadingZip(true);
     const formData = new FormData();
-    formData.append('file', file);
+    if (file) formData.append('file', file);
+    if (folderPath) formData.append('folderPath', folderPath);
     formData.append('domain', domainFilter);
 
     try {
@@ -1241,9 +1119,10 @@ export function useRecordsPage() {
       });
     } finally {
       setUploadingZip(false);
-      if (fileInputRef.current) fileInputRef.current.value = '';
     }
   };
+  const handleBulkZipUpload = (file: File) => handleBulkArtifactUpload({ file });
+  const handleBulkFolderUpload = (folderPath: string) => handleBulkArtifactUpload({ folderPath });
 
   const handleExport = async (type: 'comments' | 'scoring') => {
     if (!selectedClass) return;
@@ -1373,13 +1252,10 @@ export function useRecordsPage() {
   }, [selectedClass, subjects, domainFilter, evalItemsMap, commentsItemsMap, writtenExams, showScoring, showComments, showComprehensive]);
 
   // ── Frozen column widths & sticky left offsets ─────────────────────────────
-  const cw = {
-    chk: colWidths['_chk'] ?? FROZEN_DEFAULT_WIDTHS.chk,
-    cls: colWidths['_cls'] ?? FROZEN_DEFAULT_WIDTHS.cls,
-    num: colWidths['_num'] ?? FROZEN_DEFAULT_WIDTHS.num,
-    name: colWidths['_name'] ?? FROZEN_DEFAULT_WIDTHS.name,
-  };
+  const frozenLayout = recordsFrozenLayout(colWidths);
+  const cw = frozenLayout.width;
   const compWidth = colWidths['_comp'] ?? 320;
+  const activityWidth = colWidths['_activity'] ?? 280;
   const compCountWidth = colWidths['_comp_count'] ?? 74;
   const compSpellWidth = colWidths['_comp_spell'] ?? 320;
   const grandTotalWidth = colWidths['_grand_total'] ?? 70;
@@ -1396,16 +1272,9 @@ export function useRecordsPage() {
       });
     }),
     ...(showScoring ? [grandTotalWidth] : []),
-    ...(showComprehensive ? [compWidth, compCountWidth, compSpellWidth] : []),
+    ...(showComprehensive ? [activityWidth, compWidth, compCountWidth, compSpellWidth] : []),
   ];
   const tableTotalWidth = tableColumnWidths.reduce((sum, width) => sum + width, 0);
-  const sl = {
-    chk: 0,
-    cls: cw.chk,
-    num: cw.chk + cw.cls,
-    name: cw.chk + cw.cls + cw.num,
-  };
-  const separatorShadow = '2px 0 5px rgba(0,0,0,0.08)';
   const selectedSubject = selectedClass
     ? subjects.find(s =>
       s.year === selectedClass.year &&
@@ -1487,8 +1356,8 @@ export function useRecordsPage() {
     domainFilter,
     setDomainFilter,
     uploadingZip,
-    fileInputRef,
     handleBulkZipUpload,
+    handleBulkFolderUpload,
     handleGenerateSelected,
     handleStartClaudeBatch,
     handleOpenClaudeBatchResults,
@@ -1614,172 +1483,30 @@ export function useRecordsPage() {
       children: selectedClass && (
           <>
           {showClaudeBatchDialog && (
-            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4" onClick={() => setShowClaudeBatchDialog(false)}>
-              <div className="w-full max-w-3xl rounded-lg border border-gray-200 bg-white shadow-xl" onClick={(e) => e.stopPropagation()}>
-                <div className="flex items-center justify-between border-b border-gray-100 px-5 py-4">
-                  <div>
-                    <h3 className="text-sm font-semibold text-gray-900">Claude 배치 결과</h3>
-                    <p className="mt-1 text-xs text-gray-500">
-                      {selectedClass.year}학년도 {selectedClass.semester}학기 {selectedClass.grade}학년 {selectedClass.subject} {selectedClass.room}
-                    </p>
-                  </div>
-                  <button
-                    type="button"
-                    className="rounded px-2 py-1 text-sm text-gray-500 hover:bg-gray-100 hover:text-gray-700"
-                    onClick={() => setShowClaudeBatchDialog(false)}
-                  >
-                    닫기
-                  </button>
-                </div>
-                <div className="max-h-[65vh] overflow-auto p-4">
-                  {classClaudeBatchJobs.length === 0 ? (
-                    <div className="py-10 text-center text-sm text-gray-400">남아있는 배치가 없습니다.</div>
-                  ) : (
-                    <table className="w-full border-collapse text-sm">
-                      <thead>
-                        <tr className="border-b bg-gray-50 text-xs font-semibold text-gray-600">
-                          <th className="px-3 py-2 text-center">종류</th>
-                          <th className="px-3 py-2 text-center">영역</th>
-                          <th className="px-3 py-2 text-center">인원 수</th>
-                          <th className="px-3 py-2 text-center">요청 시각</th>
-                          <th className="px-3 py-2 text-center">결과</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {classClaudeBatchJobs.map((job) => {
-                          const requestPending = !job.providerBatchIds?.length;
-                          return (
-                            <tr key={job.id} className="border-b last:border-b-0">
-                              <td className="px-3 py-2 text-center text-gray-800">{batchKindLabel(job.contentType, job.domains)}</td>
-                              <td className="px-3 py-2 text-center text-gray-600">{batchDomainLabel(job.domains)}</td>
-                              <td className="px-3 py-2 text-center tabular-nums text-gray-600">{job.studentIds.length || job.total}</td>
-                              <td className="px-3 py-2 text-center text-gray-600">{batchStartedAtLabel(job.startedAt)}</td>
-                              <td className="px-3 py-2 text-center">
-                                <button
-                                  type="button"
-                                  className="btn-secondary h-8 px-3 text-xs"
-                                  onClick={() => handleCheckClaudeBatchResults(job.id)}
-                                  disabled={requestPending}
-                                >
-                                  {requestPending ? '요청 중' : '결과'}
-                                </button>
-                              </td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  )}
-                </div>
-              </div>
-            </div>
+            <ClaudeBatchResultsDialog
+              subtitle={`${selectedClass.year}학년도 ${selectedClass.semester}학기 ${selectedClass.grade}학년 ${selectedClass.subject} ${selectedClass.room}`}
+              jobs={classClaudeBatchJobs as ClaudeBatchResultJob[]}
+              kindLabel={job => batchKindLabel(job.contentType as 'scoring' | 'comments' | 'combined' | 'spellcheck', job.domains)}
+              domainLabel={job => batchDomainLabel(job.domains)}
+              receivingId={receivingClaudeBatchId}
+              onReceive={job => handleCheckClaudeBatchResults(job.id)}
+              onClose={() => setShowClaudeBatchDialog(false)}
+            />
           )}
           {bulkZipResult && (
-            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4" onClick={() => setBulkZipResult(null)}>
-              <div className="flex max-h-[80vh] w-full max-w-4xl flex-col rounded-lg border border-gray-200 bg-white shadow-xl" onClick={(e) => e.stopPropagation()}>
-                <div className="flex items-center justify-between border-b border-gray-100 px-5 py-4">
-                  <div>
-                    <h3 className="text-sm font-semibold text-gray-900">ZIP 일괄 업로드 결과</h3>
-                    <p className="mt-1 text-xs text-gray-500">
-                      {selectedClass.year}학년도 {selectedClass.semester}학기 {selectedClass.grade}학년 {selectedClass.subject} {selectedClass.room} · {domainFilter}
-                    </p>
-                  </div>
-                  <button
-                    type="button"
-                    className="rounded px-2 py-1 text-sm text-gray-500 hover:bg-gray-100 hover:text-gray-700"
-                    onClick={() => setBulkZipResult(null)}
-                  >
-                    닫기
-                  </button>
-                </div>
-                <div className="min-h-0 overflow-auto p-5">
-                  <p className={`mb-4 text-sm ${bulkZipResult.failed ? 'text-red-600' : 'text-gray-700'}`}>
-                    {bulkZipResult.message}
-                  </p>
-                  {!bulkZipResult.failed && (
-                    <>
-                      <div className="mb-5 grid grid-cols-2 gap-2 sm:grid-cols-5">
-                        {[
-                          ['전체 파일', bulkZipResult.total, 'text-gray-800'],
-                          ['등록', bulkZipResult.count, 'text-emerald-700'],
-                          ['연결 학생', bulkZipResult.studentCount, 'text-blue-700'],
-                          ['미매칭', bulkZipResult.unmatchedCount, 'text-amber-700'],
-                          ['충돌/오류', bulkZipResult.conflictCount + bulkZipResult.errorCount, 'text-red-700'],
-                        ].map(([label, value, color]) => (
-                          <div key={String(label)} className="rounded-md border border-gray-200 bg-gray-50 px-3 py-2 text-center">
-                            <div className="text-[11px] text-gray-500">{label}</div>
-                            <div className={`mt-0.5 text-lg font-semibold tabular-nums ${color}`}>{value}</div>
-                          </div>
-                        ))}
-                      </div>
-                      {students.length > 0 && (
-                        <table className="w-full table-fixed border-collapse text-xs">
-                          <thead className="sticky top-0 bg-gray-50 text-gray-600">
-                            <tr className="border-b border-gray-200">
-                              <th className="w-12 px-3 py-2 text-center">반</th>
-                              <th className="w-12 px-3 py-2 text-center">번호</th>
-                              <th className="w-24 px-3 py-2 text-left">이름</th>
-                              <th className="w-24 px-3 py-2 text-center">결과</th>
-                              <th className="px-3 py-2 text-left">등록 파일</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {bulkZipStudentRows.map(({ student, results: studentResults }) => {
-                              const classNum = Math.floor((student.student_num % 10000) / 100);
-                              const seatNum = student.student_num % 100;
-                              const uploaded = studentResults.filter(result => result.status === 'uploaded');
-                              const errors = studentResults.filter(result => result.status === 'read_error');
-                              const status = errors.length
-                                ? { label: `오류 ${errors.length}개`, color: 'text-red-700' }
-                                : uploaded.length
-                                  ? { label: `등록 ${uploaded.length}개`, color: 'text-emerald-700' }
-                                  : { label: '없음', color: 'text-gray-400' };
-                              return (
-                                <tr key={student.id} className="border-b border-gray-100 align-top last:border-b-0">
-                                  <td className="px-3 py-2 text-center text-gray-600">{classNum}</td>
-                                  <td className="px-3 py-2 text-center text-gray-600">{seatNum}</td>
-                                  <td className="px-3 py-2 font-medium text-gray-800">{student.name}</td>
-                                  <td className={`px-3 py-2 text-center font-semibold ${status.color}`}>{status.label}</td>
-                                  <td className="px-3 py-2 text-gray-700">
-                                    {studentResults.length === 0 ? (
-                                      <span className="text-gray-400">-</span>
-                                    ) : (
-                                      <div className="space-y-1">
-                                        {studentResults.map((result, index) => (
-                                          <div key={`${result.path}:${index}`} className={result.status === 'read_error' ? 'text-red-600' : 'break-all'}>
-                                            {result.path}{result.reason ? ` — ${result.reason}` : ''}
-                                          </div>
-                                        ))}
-                                      </div>
-                                    )}
-                                  </td>
-                                </tr>
-                              );
-                            })}
-                          </tbody>
-                        </table>
-                      )}
-                      {bulkZipUnassignedResults.length > 0 && (
-                        <div className="mt-5 rounded-md border border-amber-200 bg-amber-50 p-3">
-                          <h4 className="text-xs font-semibold text-amber-800">학생에게 연결되지 않은 파일</h4>
-                          <div className="mt-2 space-y-1.5 text-xs">
-                            {bulkZipUnassignedResults.map((result, index) => (
-                              <div key={`${result.path}:${index}`} className="flex gap-3">
-                                <span className={`w-12 shrink-0 font-semibold ${result.status === 'unmatched' ? 'text-amber-700' : 'text-red-700'}`}>
-                                  {result.status === 'unmatched' ? '미매칭' : '충돌'}
-                                </span>
-                                <span className="min-w-0 break-all text-gray-700">{result.path}</span>
-                                <span className="shrink-0 text-gray-500">{result.reason}</span>
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      )}
-                    </>
-                  )}
-                </div>
-              </div>
-            </div>
+            <BulkImportResultDialog
+              title="산출물 일괄 업로드 결과"
+              message={bulkZipResult.message}
+              onClose={() => setBulkZipResult(null)}
+              results={bulkZipResult.results}
+              stats={[
+                { label: '전체 파일', value: bulkZipResult.total },
+                { label: '등록', value: bulkZipResult.count },
+                { label: '연결 학생', value: bulkZipResult.studentCount },
+                { label: '미매칭', value: bulkZipResult.unmatchedCount },
+                { label: '충돌/오류', value: bulkZipResult.conflictCount + bulkZipResult.errorCount },
+              ]}
+            />
           )}
           {/* 테이블 뷰 */}
           <div className="flex-1 overflow-auto scrollbar-stable bg-white pb-32">
@@ -1800,37 +1527,7 @@ export function useRecordsPage() {
                 {/* ── HEADER ── */}
                 <thead className="bg-gray-50 sticky top-0 z-20 shadow-sm">
                   <tr>
-                    {/* Frozen: checkbox */}
-                    <th rowSpan={2} className="relative sticky z-30 bg-gray-100 border-b border-r text-center select-none"
-                      style={{ left: sl.chk, width: cw.chk, minWidth: cw.chk }}>
-                      <div className="flex justify-center items-center py-3">
-                        <input type="checkbox" className="h-4 w-4 rounded border-gray-300"
-                          checked={allStudentsSelected} onChange={toggleAllStudents} title="전체 선택/해제" />
-                      </div>
-                      <div className="records-table-column-resize-handle absolute right-0 top-0 bottom-0 cursor-col-resize bg-transparent z-10"
-                        onMouseDown={e => handleResizeStart(e, '_chk', FROZEN_DEFAULT_WIDTHS.chk)} />
-                    </th>
-                    {/* Frozen: 반 */}
-                    <th rowSpan={2} className="relative sticky z-30 bg-gray-100 border-b border-r text-center font-semibold text-gray-600 select-none"
-                      style={{ left: sl.cls, width: cw.cls, minWidth: cw.cls }}>
-                      반
-                      <div className="records-table-column-resize-handle absolute right-0 top-0 bottom-0 cursor-col-resize bg-transparent z-10"
-                        onMouseDown={e => handleResizeStart(e, '_cls', FROZEN_DEFAULT_WIDTHS.cls)} />
-                    </th>
-                    {/* Frozen: 번호 */}
-                    <th rowSpan={2} className="relative sticky z-30 bg-gray-100 border-b border-r text-center font-semibold text-gray-600 select-none"
-                      style={{ left: sl.num, width: cw.num, minWidth: cw.num }}>
-                      번호
-                      <div className="records-table-column-resize-handle absolute right-0 top-0 bottom-0 cursor-col-resize bg-transparent z-10"
-                        onMouseDown={e => handleResizeStart(e, '_num', FROZEN_DEFAULT_WIDTHS.num)} />
-                    </th>
-                    {/* Frozen: 이름 */}
-                    <th rowSpan={2} className="relative sticky z-30 bg-gray-100 border-b border-r text-center font-semibold text-gray-600 select-none"
-                      style={{ left: sl.name, width: cw.name, minWidth: cw.name, boxShadow: separatorShadow }}>
-                      이름
-                      <div className="records-table-column-resize-handle absolute right-0 top-0 bottom-0 cursor-col-resize bg-transparent z-10"
-                        onMouseDown={e => handleResizeStart(e, '_name', FROZEN_DEFAULT_WIDTHS.name)} />
-                    </th>
+                    <RecordsFrozenHeader layout={frozenLayout} allSelected={allStudentsSelected} onToggleAll={toggleAllStudents} onResize={handleResizeStart}/>
 
                     {/* Domain group headers */}
                     {tableLayout.visibleDomains.map((d: any) => {
@@ -1869,6 +1566,12 @@ export function useRecordsPage() {
                     {/* Comp comments header */}
                     {showComprehensive && (
                       <>
+                        <th rowSpan={2} className="relative px-4 py-3 font-semibold text-gray-800 border-b border-r bg-amber-50/60 text-center select-none"
+                          style={{ width: activityWidth, minWidth: activityWidth }}>
+                          활동
+                          <div className="records-table-column-resize-handle absolute right-0 top-0 bottom-0 cursor-col-resize bg-transparent z-10"
+                            onMouseDown={e => handleResizeStart(e, '_activity', 280)} />
+                        </th>
                         <th rowSpan={2} className="relative px-4 py-3 font-semibold text-gray-800 border-b border-r bg-blue-50/50 text-center select-none"
                           style={{ width: compWidth, minWidth: compWidth }}>
                           과목별세부능력및특기사항
@@ -1935,33 +1638,7 @@ export function useRecordsPage() {
 
                     return (
                       <tr key={s.id} className="records-table-row" style={{ height: rowTableHeight }}>
-                        {/* Frozen: checkbox */}
-                        <td className="sticky z-10 bg-white border-r text-center"
-                          style={{ left: sl.chk, width: cw.chk, minWidth: cw.chk }}>
-                          <div className="flex justify-center py-2">
-                            <input type="checkbox" className="h-4 w-4 rounded border-gray-300"
-                              checked={selectedStudentIds.has(s.id)} onChange={() => toggleStudentSelection(s.id)} />
-                          </div>
-                          {renderCellResizeHandles(s.id, '_chk', FROZEN_DEFAULT_WIDTHS.chk)}
-                        </td>
-                        {/* Frozen: 반 */}
-                        <td className="sticky z-10 bg-white border-r text-center text-gray-500 font-mono px-1 py-2"
-                          style={{ left: sl.cls, width: cw.cls, minWidth: cw.cls }}>
-                          {classNum}
-                          {renderCellResizeHandles(s.id, '_cls', FROZEN_DEFAULT_WIDTHS.cls)}
-                        </td>
-                        {/* Frozen: 번호 */}
-                        <td className="sticky z-10 bg-white border-r text-center text-gray-500 font-mono px-1 py-2"
-                          style={{ left: sl.num, width: cw.num, minWidth: cw.num }}>
-                          {stuNum}
-                          {renderCellResizeHandles(s.id, '_num', FROZEN_DEFAULT_WIDTHS.num)}
-                        </td>
-                        {/* Frozen: 이름 */}
-                        <td className="sticky z-10 bg-white border-r font-medium text-gray-800 text-center px-1 py-2"
-                          style={{ left: sl.name, width: cw.name, minWidth: cw.name, boxShadow: separatorShadow }}>
-                          {s.name}
-                          {renderCellResizeHandles(s.id, '_name', FROZEN_DEFAULT_WIDTHS.name)}
-                        </td>
+                        <RecordsFrozenStudentCells layout={frozenLayout} rowKey={s.id} classNum={classNum} studentNum={stuNum} name={s.name} selected={selectedStudentIds.has(s.id)} onToggle={() => toggleStudentSelection(s.id)} renderResizeHandles={renderCellResizeHandles}/>
 
                         {/* Domain cells */}
                         {tableLayout.visibleDomains.map((d: any) => {
@@ -2126,6 +1803,11 @@ export function useRecordsPage() {
                         {/* Comp comments */}
                         {showComprehensive && (
                           <>
+                            <td className="group relative align-top p-2 border-r bg-amber-50/20 whitespace-pre-wrap text-sm text-gray-700"
+                              style={{ width: activityWidth, minWidth: activityWidth }}>
+                              {activitySummaries[s.id] || ''}
+                              {renderCellResizeHandles(s.id, '_activity', 280)}
+                            </td>
                             <td className="group relative align-top p-1 border-r"
                               style={{ width: compWidth, minWidth: compWidth }}>
                               {renderLlmErrorTooltip(compLlmError)}

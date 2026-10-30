@@ -6,12 +6,12 @@ import { CriteriaItemCard } from '../../components/common/CriteriaItemCard';
 import { StableTextarea } from '../../components/common/StableTextarea';
 import { assignmentConfigsApi } from '../../lib/api';
 import { downloadUrl, filesToInputChangeEvent, hasDesktopFileDialogs, openFiles, saveBlob } from '../../lib/desktopFiles';
-import { DomainCriteriaPanel, DomainCriteriaPromptView, DomainCriteriaSplit } from './DomainCriteriaPanel';
+import { CriteriaEditorPanel as DomainCriteriaPanel, CriteriaEditorPromptView as DomainCriteriaPromptView, CriteriaEditorSplit as DomainCriteriaSplit } from '../../components/common/CriteriaEditorPanel';
+import LessonPlansPage, { LessonTab } from '../../pages/LessonPlansPage';
 import { AiChatMessage, AssignmentClassSnapshot, AssignmentConfig, AssignmentResource, AssignmentRunDetail, AssignmentRunStudent, AssignmentRunSubmission, AssignmentRunSummary, EvalItem, CommentsItem, StandardRef, SubjectDomainRow, SubjectItem } from './types';
+import { DomainTab } from './constants';
 
 const ArtifactPreviewModal = lazy(() => import('../../components/ArtifactPreviewModal'));
-
-type DomainTab = 'standards' | 'scoring' | 'records' | 'assignment' | 'ratio' | 'comments';
 
 interface DomainContentProps {
   selectedSubject: SubjectItem | null;
@@ -453,6 +453,16 @@ export function DomainContent({
     return <EmptySelection />;
   }
 
+  const lessonTabMap: Partial<Record<DomainTab, LessonTab>> = {
+    'lesson-plans': 'plans',
+    'activity-records': 'records',
+    'activity-summary': 'comprehensive',
+  };
+  const embeddedLessonTab = lessonTabMap[activeTab];
+  if (!selectedDomain && embeddedLessonTab) {
+    return <LessonPlansPage embeddedSubject={selectedSubject} embeddedTab={embeddedLessonTab} />;
+  }
+
   const useFullHeightCriteriaLayout = !!selectedDomain && ['standards', 'scoring', 'records', 'comments'].includes(activeTab);
 
   return (
@@ -474,12 +484,12 @@ export function DomainContent({
               disabled={!aiEnabled}
             />
           </div>
-          <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
+          <div className="overflow-auto rounded-lg border border-gray-200 bg-white scrollbar-stable">
             <div className={`flex h-8 items-center gap-1.5 border-b px-3 text-xs transition-colors ${subjectAssessmentRatioError ? 'border-red-200 bg-red-50 text-red-700' : 'border-gray-100 bg-gray-50 text-transparent'}`}>
               {subjectAssessmentRatioError && <AlertCircle size={12} className="shrink-0" />}
               <span>{subjectAssessmentRatioError || '반영비율 합계 정상'}</span>
             </div>
-            <table className="w-full text-xs">
+            <table className="min-w-[900px] w-full text-xs">
               <thead className="bg-gray-50/50">
                 <tr className="border-b border-gray-100">
                   <th className="px-3 py-2 text-left font-medium text-gray-500 w-28">평가종류</th>

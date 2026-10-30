@@ -252,6 +252,117 @@ export async function initDb(): Promise<void> {
       created_at          TEXT    DEFAULT (datetime('now')),
       updated_at          TEXT    DEFAULT (datetime('now'))
     );
+
+    CREATE TABLE IF NOT EXISTS subject_plan_settings (
+      id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+      year                  INTEGER NOT NULL,
+      semester              INTEGER NOT NULL,
+      grade                 INTEGER NOT NULL,
+      subject               TEXT NOT NULL,
+      record_mode           TEXT NOT NULL DEFAULT 'app' CHECK(record_mode IN ('app', 'excel')),
+      excel_path            TEXT NOT NULL DEFAULT '',
+      source_folder         TEXT NOT NULL DEFAULT '',
+      source_filename       TEXT NOT NULL DEFAULT '',
+      source_filepath       TEXT NOT NULL DEFAULT '',
+      common_prompt         TEXT NOT NULL DEFAULT '제출물에 있는 사실만 쓴다. 칭찬, 평가, 점수는 쓰지 않는다. 학생 이름을 쓰지 않는다. 한국어로 쓴다.',
+      practice_prompt       TEXT NOT NULL DEFAULT '원본과 비교해 진행도를 n/m으로 쓴다. 마지막으로 완료한 단계, 결과가 없거나 오류가 있는 단계, 원본에서 바꾼 부분을 쓴다.',
+      inquiry_prompt        TEXT NOT NULL DEFAULT '질문, 사용한 데이터와 방법, 결과를 2~3문장으로 쓴다. 다시 제출한 경우 달라진 점을 먼저 쓴다.',
+      concept_prompt        TEXT NOT NULL DEFAULT '1문장으로 쓴다. 제출물이 없으면 "제출물 없음"이라고 쓴다.',
+      other_prompt          TEXT NOT NULL DEFAULT '1문장으로 쓴다.',
+      comprehensive_prompt  TEXT NOT NULL DEFAULT '학기 전체의 활동 요약, 관찰, 성찰을 바탕으로 반복되는 관심, 시도, 변화와 구체적인 사실을 간결하게 종합한다. 학생 이름과 평가·점수는 쓰지 않는다.',
+      record_chat           TEXT NOT NULL DEFAULT '[]',
+      comprehensive_chat    TEXT NOT NULL DEFAULT '[]',
+      updated_at            TEXT DEFAULT (datetime('now')),
+      UNIQUE(year, semester, grade, subject)
+    );
+
+    CREATE TABLE IF NOT EXISTS lesson_plans (
+      id          TEXT PRIMARY KEY,
+      year        INTEGER NOT NULL,
+      semester    INTEGER NOT NULL,
+      grade       INTEGER NOT NULL,
+      subject     TEXT NOT NULL,
+      lesson_no   REAL NOT NULL,
+      progress    TEXT NOT NULL DEFAULT '',
+      content     TEXT NOT NULL DEFAULT '',
+      memo        TEXT NOT NULL DEFAULT '',
+      kind        TEXT NOT NULL DEFAULT '기타' CHECK(kind IN ('개념', '실습', '탐구', '기타')),
+      source_files TEXT NOT NULL DEFAULT '',
+      prompt      TEXT NOT NULL DEFAULT '',
+      sort_order  INTEGER NOT NULL DEFAULT 0,
+      updated_at  TEXT DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS activity_dates (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      class_id    INTEGER NOT NULL REFERENCES classes(id) ON DELETE CASCADE,
+      activity_date TEXT NOT NULL,
+      lesson_no   REAL NOT NULL DEFAULT 0,
+      progress    TEXT NOT NULL DEFAULT '',
+      journal     TEXT NOT NULL DEFAULT '',
+      source_mode TEXT NOT NULL DEFAULT 'app',
+      updated_at  TEXT DEFAULT (datetime('now')),
+      UNIQUE(class_id, activity_date)
+    );
+
+    CREATE TABLE IF NOT EXISTS activity_files (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      student_id  INTEGER NOT NULL REFERENCES class_students(id) ON DELETE CASCADE,
+      activity_date_id INTEGER NOT NULL REFERENCES activity_dates(id) ON DELETE CASCADE,
+      filename    TEXT NOT NULL,
+      original_filename TEXT NOT NULL DEFAULT '',
+      filepath    TEXT NOT NULL,
+      mime_type   TEXT NOT NULL DEFAULT '',
+      size        INTEGER NOT NULL DEFAULT 0,
+      uploaded_at TEXT DEFAULT (datetime('now')),
+      summarized_at TEXT DEFAULT '',
+      UNIQUE(student_id, activity_date_id, filename)
+    );
+
+    CREATE TABLE IF NOT EXISTS activity_summaries (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      student_id  INTEGER NOT NULL REFERENCES class_students(id) ON DELETE CASCADE,
+      activity_date_id INTEGER NOT NULL REFERENCES activity_dates(id) ON DELETE CASCADE,
+      summary     TEXT NOT NULL DEFAULT '',
+      manually_edited INTEGER NOT NULL DEFAULT 0,
+      updated_at  TEXT DEFAULT (datetime('now')),
+      UNIQUE(student_id, activity_date_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS activity_observations (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      student_id  INTEGER NOT NULL REFERENCES class_students(id) ON DELETE CASCADE,
+      activity_date_id INTEGER NOT NULL REFERENCES activity_dates(id) ON DELETE CASCADE,
+      is_absent   INTEGER NOT NULL DEFAULT 0,
+      note        TEXT NOT NULL DEFAULT '',
+      updated_at  TEXT DEFAULT (datetime('now')),
+      UNIQUE(student_id, activity_date_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS activity_reflections (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      student_id  INTEGER NOT NULL REFERENCES class_students(id) ON DELETE CASCADE,
+      activity_date TEXT NOT NULL,
+      topic       TEXT NOT NULL DEFAULT '',
+      plus_text   TEXT NOT NULL DEFAULT '',
+      minus_text  TEXT NOT NULL DEFAULT '',
+      interesting_text TEXT NOT NULL DEFAULT '',
+      updated_at  TEXT DEFAULT (datetime('now')),
+      UNIQUE(student_id, activity_date)
+    );
+
+    CREATE TABLE IF NOT EXISTS activity_semester_summaries (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      student_id  INTEGER NOT NULL UNIQUE REFERENCES class_students(id) ON DELETE CASCADE,
+      summary     TEXT NOT NULL DEFAULT '',
+      updated_at  TEXT DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS activity_class_settings (
+      class_id    INTEGER PRIMARY KEY REFERENCES classes(id) ON DELETE CASCADE,
+      source_folder TEXT NOT NULL DEFAULT '',
+      updated_at  TEXT DEFAULT (datetime('now'))
+    );
   `);
 
   await ensureColumn('classes', 'scoring_filename', "TEXT NOT NULL DEFAULT ''");
@@ -261,6 +372,11 @@ export async function initDb(): Promise<void> {
   await ensureColumn('subject_domains', 'credit', "REAL NOT NULL DEFAULT 0");
   await ensureColumn('achievement_standards', 'credit', "REAL NOT NULL DEFAULT 0");
   await ensureColumn('class_students', 'personal_num', "TEXT NOT NULL DEFAULT ''");
+  await ensureColumn('subject_plan_settings', 'source_filename', "TEXT NOT NULL DEFAULT ''");
+  await ensureColumn('subject_plan_settings', 'source_filepath', "TEXT NOT NULL DEFAULT ''");
+  await ensureColumn('subject_plan_settings', 'comprehensive_prompt', "TEXT NOT NULL DEFAULT '학기 전체의 활동 요약, 관찰, 성찰을 바탕으로 반복되는 관심, 시도, 변화와 구체적인 사실을 간결하게 종합한다. 학생 이름과 평가·점수는 쓰지 않는다.'");
+  await ensureColumn('subject_plan_settings', 'record_chat', "TEXT NOT NULL DEFAULT '[]'");
+  await ensureColumn('subject_plan_settings', 'comprehensive_chat', "TEXT NOT NULL DEFAULT '[]'");
   await migrateGeneratedContentTypes();
   await migrateAiBatchJobsContentTypes();
 
@@ -308,6 +424,7 @@ async function migrateStoredUploadPaths(): Promise<void> {
     ['classes', 'scoring_filepath'],
     ['classes', 'comments_filepath'],
     ['artifacts', 'filepath'],
+    ['activity_files', 'filepath'],
     ['written_exam_files', 'filepath'],
   ] as const;
 
@@ -363,7 +480,7 @@ async function migrateAiBatchJobsContentTypes(): Promise<void> {
   const row = await queryOne<{ sql: string }>(
     "SELECT sql FROM sqlite_master WHERE type='table' AND name='ai_batch_jobs'"
   );
-  if (!row?.sql || (row.sql.includes("'combined'") && row.sql.includes("'spellcheck'"))) return;
+  if (!row?.sql || (row.sql.includes("'combined'") && row.sql.includes("'spellcheck'") && row.sql.includes("'activity'"))) return;
   const db = getClient();
   await db.execute('ALTER TABLE ai_batch_jobs RENAME TO ai_batch_jobs_old');
   await db.execute(`
@@ -372,7 +489,7 @@ async function migrateAiBatchJobsContentTypes(): Promise<void> {
       provider_batch_id   TEXT    NOT NULL UNIQUE,
       class_id            INTEGER NOT NULL REFERENCES classes(id) ON DELETE CASCADE,
       domain              TEXT    NOT NULL,
-      content_type        TEXT    NOT NULL CHECK(content_type IN ('scoring', 'comments', 'combined', 'spellcheck')),
+      content_type        TEXT    NOT NULL CHECK(content_type IN ('scoring', 'comments', 'combined', 'spellcheck', 'activity')),
       status              TEXT    NOT NULL DEFAULT 'in_progress',
       request_count       INTEGER NOT NULL DEFAULT 0,
       metadata            TEXT    NOT NULL DEFAULT '{}',

@@ -22,9 +22,11 @@ interface DesktopSaveFileResult {
 }
 
 interface Window {
+  __hasUnsavedChanges?: boolean;
   assessmentDesktop?: {
     setDisplaySleepPrevention?: (enabled: boolean) => Promise<boolean>;
     saveFile?: (filename: string, data: ArrayBuffer) => Promise<DesktopSaveFileResult>;
     openFiles?: (options?: DesktopOpenFilesOptions) => Promise<DesktopOpenFilesResult>;
+    openDirectory?: () => Promise<{ canceled: boolean; path?: string }>;
   };
 }

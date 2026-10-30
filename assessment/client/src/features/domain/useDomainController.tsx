@@ -1436,6 +1436,7 @@ export function useDomainController() {
     showGuide,
     hideGuide,
     domainTree,
+    reloadSubjects: loadSubjects,
     saving,
     handleSave,
     handleDomainsUpload: domainsUpload.handleUpload,

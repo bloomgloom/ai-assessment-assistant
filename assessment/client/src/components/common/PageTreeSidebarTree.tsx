@@ -1,5 +1,5 @@
 import { isValidElement, ReactNode } from 'react';
-import { Download, Plus, Trash2 } from 'lucide-react';
+import { Download, FileSpreadsheet, Link2, Plus, Trash2 } from 'lucide-react';
 import { TreeView } from './TreeView';
 import { TreeEditingItem, TreeIconButton, TreeNodeLike, TreeNodeView } from './TreeNodeView';
 
@@ -23,7 +23,7 @@ export interface PageTreeSidebarTreeConfig<T> {
 
 interface PageTreeSidebarNodeAction<T> {
   title: string;
-  icon: 'download' | 'trash';
+  icon: 'download' | 'file' | 'link' | 'trash';
   variant?: 'neutral' | 'blue' | 'red' | 'green' | 'purple';
   visible?: 'always' | 'hover' | 'hidden';
   onClick: (node: T) => void;
@@ -91,6 +91,8 @@ function renderEmpty(empty: ReactNode | PageTreeSidebarEmptyConfig) {
 
 function actionIcon(icon: PageTreeSidebarNodeAction<unknown>['icon']) {
   if (icon === 'download') return <Download size={13} />;
+  if (icon === 'file') return <FileSpreadsheet size={13} />;
+  if (icon === 'link') return <Link2 size={13} />;
   return <Trash2 size={13} />;
 }
 

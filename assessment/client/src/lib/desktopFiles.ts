@@ -56,6 +56,18 @@ export async function openFiles(options?: DesktopOpenFilesOptions): Promise<File
   return result.files.map(file => new File([file.data], file.name));
 }
 
+export async function openDirectory(): Promise<string | null> {
+  if (!window.assessmentDesktop?.openDirectory) return null;
+  const result = await window.assessmentDesktop.openDirectory();
+  return result.canceled ? '' : (result.path || '');
+}
+
+export async function openFilePath(filters?: { name: string; extensions: string[] }[]): Promise<string | null> {
+  if (!window.assessmentDesktop?.openFiles) return null;
+  const result = await window.assessmentDesktop.openFiles({ filters });
+  return result.canceled ? '' : (result.files[0]?.path || '');
+}
+
 export function filesToInputChangeEvent(files: File[]) {
   return {
     target: { files, value: '' },

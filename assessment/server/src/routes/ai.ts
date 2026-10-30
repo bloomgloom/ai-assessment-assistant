@@ -17,25 +17,15 @@ import {
   type LLMLogSession,
   type LLMSettings,
 } from '../services/llm';
-import { extractHwpxText } from '../services/hwpx';
-import { imageFileToAttachment, pdfToRedactedJpegAttachments } from '../services/visionArtifacts';
-import { buildNotebookExecutionEvidence, buildTabularDataEvidence } from '../services/artifactEvidence';
-import { resolveStoredPath } from '../services/storage';
 import { assignmentArtifactsForStudent } from '../services/assignmentArtifacts';
 import { parseFirstJson } from '../services/json';
+import { appendArtifactContents, type ArtifactRow } from '../services/artifactPrompt';
 
 const router = Router();
 const SUBJECT_COMPREHENSIVE_DOMAIN = '__SUBJECT_COMPREHENSIVE__';
 
 function batchCreateErrorStatus(error: unknown): number {
   return error instanceof Error && error.name === 'ClaudeBatchCreateTimeoutError' ? 504 : 500;
-}
-
-interface ArtifactRow {
-  id: number;
-  filename: string;
-  filepath: string;
-  mime_type: string;
 }
 
 interface GenerateRequest {
@@ -59,7 +49,7 @@ interface ClaudeBatchJobRow {
   provider_batch_id: string;
   class_id: number;
   domain: string;
-  content_type: 'scoring' | 'comments' | 'combined' | 'spellcheck';
+  content_type: 'scoring' | 'comments' | 'combined' | 'spellcheck' | 'activity';
   status: string;
   request_count: number;
   metadata: string;
@@ -649,248 +639,6 @@ function buildDefaultScoringContent(criteria: EvalCriterion[]): string {
   return JSON.stringify(content);
 }
 
-const FILE_REFERENCE_EXTENSIONS = [
-  'csv', 'tsv', 'xlsx', 'xls', 'json', 'txt', 'md', 'ipynb', 'py', 'js', 'ts', 'html', 'css',
-  'xml', 'sql', 'pkl', 'pickle', 'parquet', 'png', 'jpg', 'jpeg', 'gif', 'webp', 'pdf', 'hwpx',
-];
-const FILE_REFERENCE_EXT_PATTERN = FILE_REFERENCE_EXTENSIONS.join('|');
-const UNQUOTED_FILE_REFERENCE_PATTERN = new RegExp(
-  `(?<![\\p{L}\\p{N}_./\\\\'"\`"-])((?:\\.{1,2}[/\\\\])?(?:[^\\s'"\`<>(){}\\[\\],;:]+[/\\\\])*[^\\s'"\`<>(){}\\[\\],;:]+\\s*\\.(${FILE_REFERENCE_EXT_PATTERN}))(?![\\p{L}\\p{N}_./\\\\'"\`"-])`,
-  'giu'
-);
-const QUOTED_TEXT_PATTERN = /(['"`])([^'"`\r\n]{0,300})\1/g;
-
-interface ArtifactPrivacyMapper {
-  artifactName(artifact: ArtifactRow): string;
-  sanitizeText(text: string): string;
-}
-
-function createArtifactPrivacyMapper(artifacts: ArtifactRow[]): ArtifactPrivacyMapper {
-  const mapping = new Map<string, string>();
-  let nextFileIndex = 1;
-
-  const anonymize = (rawReference: string): string => {
-    const key = rawReference.normalize('NFC');
-    const existing = mapping.get(key);
-    if (existing) return existing;
-
-    const ext = key.match(/\.([A-Za-z0-9]+)\s*$/)?.[1]?.toLowerCase();
-    const anonymized = `file_${String(nextFileIndex).padStart(3, '0')}${ext ? `.${ext}` : ''}`;
-    nextFileIndex += 1;
-    mapping.set(key, anonymized);
-    return anonymized;
-  };
-
-  for (const artifact of artifacts) anonymize(artifact.filename);
-
-  return {
-    artifactName(artifact: ArtifactRow): string {
-      return anonymize(artifact.filename);
-    },
-    sanitizeText(text: string): string {
-      return text
-        .replace(QUOTED_TEXT_PATTERN, (_match, quote: string, content: string) => {
-          const sanitizedContent = content.replace(UNQUOTED_FILE_REFERENCE_PATTERN, (_contentMatch, reference: string) => {
-            return anonymize(reference);
-          });
-          return `${quote}${sanitizedContent}${quote}`;
-        })
-        .replace(UNQUOTED_FILE_REFERENCE_PATTERN, (_match, reference: string) => {
-          return anonymize(reference);
-        });
-    },
-  };
-}
-
-interface DecodedTextBuffer {
-  text: string;
-  encoding: string;
-}
-
-function decodeTextBufferWithEncoding(buffer: Buffer): DecodedTextBuffer {
-  const encodings = ['utf-8', 'euc-kr', 'utf-16le'];
-  for (const encoding of encodings) {
-    try {
-      const decoded = new TextDecoder(encoding, { fatal: encoding === 'utf-8' }).decode(buffer);
-      if (!decoded.includes('\uFFFD')) return { text: decoded, encoding };
-    } catch { /* try next encoding */ }
-  }
-  return { text: buffer.toString('utf8'), encoding: 'utf-8-fallback' };
-}
-
-function decodeTextBuffer(buffer: Buffer): string {
-  return decodeTextBufferWithEncoding(buffer).text;
-}
-
-function normalizeNotebookSource(source: unknown): string {
-  if (Array.isArray(source)) return source.join('');
-  return typeof source === 'string' ? source : '';
-}
-
-function extractIpynbInputText(buffer: Buffer, options: { skipFirstMarkdownCell?: boolean } = {}): string {
-  const notebook = JSON.parse(decodeTextBuffer(buffer)) as {
-    cells?: { cell_type?: string; source?: unknown }[];
-  };
-  if (!Array.isArray(notebook.cells)) return '';
-
-  const chunks: string[] = [];
-  notebook.cells.forEach((cell, index) => {
-    if (options.skipFirstMarkdownCell && index === 0 && cell.cell_type === 'markdown') {
-      return;
-    }
-    const source = normalizeNotebookSource(cell.source).trim();
-    if (!source) return;
-    if (cell.cell_type === 'markdown') {
-      chunks.push(`[Markdown Cell ${index + 1}]\n${source}`);
-    } else if (cell.cell_type === 'code') {
-      chunks.push(`[Code Cell ${index + 1}]\n\`\`\`python\n${source}\n\`\`\``);
-    }
-  });
-  return chunks.join('\n\n');
-}
-
-function extractCsvInputText(buffer: Buffer): DecodedTextBuffer {
-  const decoded = decodeTextBufferWithEncoding(buffer);
-  return { ...decoded, text: decoded.text.trim() };
-}
-
-function stripLeadingCStyleBlockComment(code: string): string {
-  return code.replace(/^(\uFEFF?\s*)\/\*[\s\S]*?\*\/[ \t]*(?:\r?\n)?/, '$1');
-}
-
-function stripLeadingPythonDocstring(code: string): string {
-  return code.replace(/^(\uFEFF?\s*)("""|''')[\s\S]*?\2[ \t]*(?:\r?\n)?/, '$1');
-}
-
-function stripLeadingCodeIntroBlock(code: string, ext: string): string {
-  if (ext === 'py') return stripLeadingPythonDocstring(code);
-
-  const cStyleBlockCommentExts = new Set([
-    'c', 'cpp', 'h', 'java', 'js', 'jsx', 'ts', 'tsx', 'css', 'sql',
-  ]);
-  if (cStyleBlockCommentExts.has(ext)) return stripLeadingCStyleBlockComment(code);
-
-  return code;
-}
-
-async function appendArtifactContents(
-  parts: string[],
-  artifacts: ArtifactRow[],
-  settings: Pick<LLMSettings, 'artifactStripIntroBlocks' | 'artifactStripIntroBlocksDeprecated' | 'pdfRedactionTopCm'>,
-  attachments: LLMImageAttachment[] = [],
-): Promise<boolean> {
-  let hasContent = false;
-  const privacyMapper = createArtifactPrivacyMapper(artifacts);
-  const codeExts: Record<string, string> = {
-    py: 'python', js: 'javascript', ts: 'typescript', jsx: 'javascript', tsx: 'typescript',
-    c: 'c', cpp: 'cpp', h: 'c', java: 'java', html: 'html', css: 'css', sql: 'sql', json: 'json',
-  };
-
-  for (const [index, artifact] of artifacts.entries()) {
-    const ext = artifact.filename.split('.').pop()?.toLowerCase() || '';
-    const filepath = resolveStoredPath(artifact.filepath);
-    const resolvedArtifact = { ...artifact, filepath };
-    const promptLabel = `산출물 ${index + 1}: ${privacyMapper.artifactName(artifact)}`;
-    if (ext === 'hwpx') {
-      try {
-        const text = privacyMapper.sanitizeText(
-          await extractHwpxText(fs.readFileSync(filepath), {
-            skipFirstTableRow: settings.artifactStripIntroBlocksDeprecated,
-          })
-        );
-        if (text) {
-          const note = settings.artifactStripIntroBlocksDeprecated
-            ? 'HWPX XML 텍스트 추출: 첫 표 행 제외'
-            : 'HWPX XML 텍스트 추출';
-          parts.push(`[${promptLabel}]\n[${note}]\n${text}\n---`);
-          hasContent = true;
-        }
-      } catch { /* skip */ }
-    } else if (ext === 'ipynb') {
-      try {
-        const text = privacyMapper.sanitizeText(
-          extractIpynbInputText(fs.readFileSync(filepath), {
-            skipFirstMarkdownCell: settings.artifactStripIntroBlocksDeprecated,
-          })
-        );
-        if (text) {
-          const note = settings.artifactStripIntroBlocksDeprecated
-            ? 'Jupyter Notebook 입력 추출: 첫 마크다운 셀 및 실행 결과 제외'
-            : 'Jupyter Notebook 입력 추출: 실행 결과 제외';
-          parts.push(`[${promptLabel}]\n[${note}]\n${text}\n---`);
-          hasContent = true;
-        }
-      } catch { /* skip */ }
-      try {
-        const evidence = await buildNotebookExecutionEvidence(
-          resolvedArtifact,
-          artifacts.map((item) => ({ ...item, filepath: resolveStoredPath(item.filepath) })),
-          privacyMapper.artifactName(artifact),
-          { skipFirstMarkdownCell: settings.artifactStripIntroBlocksDeprecated },
-        );
-        const text = privacyMapper.sanitizeText(evidence.text);
-        if (text) {
-          parts.push(`[${promptLabel}]\n${text}\n---`);
-          hasContent = true;
-        }
-        attachments.push(...evidence.attachments);
-      } catch { /* skip */ }
-    } else if (['csv', 'tsv', 'xlsx', 'xls'].includes(ext)) {
-      try {
-        const text = privacyMapper.sanitizeText(await buildTabularDataEvidence(resolvedArtifact));
-        if (text) {
-          parts.push(`[${promptLabel}]\n${text}\n---`);
-          hasContent = true;
-        }
-      } catch { /* skip */ }
-    } else if (codeExts[ext]) {
-      try {
-        const rawCode = fs.readFileSync(filepath, 'utf-8');
-        const code = privacyMapper.sanitizeText(
-          settings.artifactStripIntroBlocks ? stripLeadingCodeIntroBlock(rawCode, ext) : rawCode
-        );
-        parts.push(`[${promptLabel}]\n\`\`\`${codeExts[ext]}\n${code}\n\`\`\`\n---`);
-        hasContent = true;
-      } catch { /* skip */ }
-    } else if (artifact.mime_type === 'text/plain' || ext === 'txt') {
-      try {
-        let text: string;
-        try {
-          text = fs.readFileSync(filepath, 'utf-8');
-        } catch {
-          text = fs.readFileSync(filepath, 'utf16le');
-        }
-        text = privacyMapper.sanitizeText(text);
-        parts.push(`[${promptLabel}]\n${text}\n---`);
-        hasContent = true;
-      } catch { /* skip */ }
-    } else if (['png', 'jpg', 'jpeg', 'webp'].includes(ext)) {
-      try {
-        attachments.push(imageFileToAttachment(filepath, privacyMapper.artifactName(artifact), ext));
-        parts.push(`[${promptLabel}] (이미지 파일 첨부)\n---`);
-        hasContent = true;
-      } catch { /* skip */ }
-    } else if (artifact.mime_type === 'application/pdf' || ext === 'pdf') {
-      try {
-        const topHeightCm = settings.artifactStripIntroBlocks ? settings.pdfRedactionTopCm : 0;
-        const pdfAttachments = await pdfToRedactedJpegAttachments(
-          filepath,
-          privacyMapper.artifactName(artifact),
-          topHeightCm,
-        );
-        attachments.push(...pdfAttachments);
-        parts.push(`[${promptLabel}] (원본 PDF를 LLM 입력용 이미지 ${pdfAttachments.length}쪽으로 변환해 첨부${topHeightCm > 0 ? `, 첫 페이지 상단 ${topHeightCm}cm 제거` : ''})\n---`);
-        if (pdfAttachments.length > 0) hasContent = true;
-      } catch (e) {
-        const message = e instanceof Error ? e.message : String(e);
-        throw new Error(`${promptLabel}의 PDF 이미지 변환에 실패했습니다. 채점을 중단했습니다. ${message}`);
-      }
-    }
-  }
-
-  return hasContent;
-}
-
 interface PreparedGeneration {
   studentId: number;
   prompt: string;
@@ -971,6 +719,13 @@ async function appendComprehensiveCommentsBlocks(parts: string[], studentSpecifi
       } catch { /* use raw */ }
       studentSpecificParts.push(`[${ds.domain}]\n${text}\n---`);
     }
+  }
+  const activitySummary = await queryOne<{ summary: string }>(
+    'SELECT summary FROM activity_semester_summaries WHERE student_id=?',
+    [studentId]
+  );
+  if (activitySummary?.summary?.trim()) {
+    studentSpecificParts.push(`[학생 활동 기록 종합]\n${activitySummary.summary.trim()}\n---`);
   }
   return { ok: true as const };
 }
@@ -1346,7 +1101,7 @@ router.post('/claude-batch-results', async (req: Request, res: Response) => {
     const settings = await getLLMSettings();
     if (settings.provider !== 'anthropic') return res.status(400).json({ error: 'Claude 공급자에서만 결과 확인을 사용할 수 있습니다.' });
 
-    const updates: Array<{ studentId: number; contentType: 'scoring' | 'comments' | 'spellcheck'; domain: string; content?: string; error?: string; llmResult?: string }> = [];
+    const updates: Array<{ studentId: number; contentType: 'scoring' | 'comments' | 'spellcheck' | 'activity'; domain: string; content?: string; error?: string; llmResult?: string }> = [];
     let inProgress = false;
     let checked = 0;
 
@@ -1355,7 +1110,7 @@ router.post('/claude-batch-results', async (req: Request, res: Response) => {
       if (!job) continue;
       checked++;
       const metadata = JSON.parse(job.metadata || '{}') as {
-        requests?: Array<{ customId: string; studentId: number; studentName: string }>;
+        requests?: Array<{ customId: string; studentId: number; studentName: string; activityDateId?: number; fileIds?: number[]; mode?: 'date' | 'semester' }>;
         immediateUpdates?: Array<{ studentId: number; contentType: 'scoring' | 'comments'; domain: string; content?: string; error?: string }>;
       };
 
@@ -1382,6 +1137,33 @@ router.post('/claude-batch-results', async (req: Request, res: Response) => {
         if (line.result.type === 'succeeded') {
           const resultText = extractAnthropicText(line.result.message);
           try {
+            if (job.content_type === 'activity') {
+              const parsed = parseFirstJson<{ summary?: unknown }>(resultText, 'object');
+              const summary = String(parsed.summary || '').trim();
+              if (!summary) throw new Error('활동 요약 결과가 비어 있습니다.');
+              if (meta.mode === 'semester') {
+                await execute(
+                  `INSERT INTO activity_semester_summaries(student_id,summary,updated_at) VALUES(?,?,datetime('now'))
+                   ON CONFLICT(student_id) DO UPDATE SET summary=excluded.summary,updated_at=datetime('now')`,
+                  [meta.studentId, summary]
+                );
+              } else if (meta.activityDateId) {
+                await execute(
+                  `INSERT INTO activity_summaries(student_id,activity_date_id,summary,manually_edited,updated_at)
+                   VALUES(?,?,?,0,datetime('now')) ON CONFLICT(student_id,activity_date_id) DO UPDATE SET
+                   summary=excluded.summary,manually_edited=0,updated_at=datetime('now')`,
+                  [meta.studentId, meta.activityDateId, summary]
+                );
+                if (meta.fileIds?.length) {
+                  await execute(
+                    `UPDATE activity_files SET summarized_at=datetime('now') WHERE id IN (${meta.fileIds.map(() => '?').join(',')})`,
+                    meta.fileIds
+                  );
+                }
+              }
+              updates.push({ studentId: meta.studentId, contentType: 'activity', domain: meta.mode === 'semester' ? '__ACTIVITY_SEMESTER__' : String(meta.activityDateId || ''), content: summary });
+              continue;
+            }
             if (job.content_type === 'spellcheck') {
               const parsed = parseSpellcheckResult(resultText);
               updates.push({

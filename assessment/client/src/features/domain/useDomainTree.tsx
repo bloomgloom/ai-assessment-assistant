@@ -7,6 +7,7 @@ import {
 } from '../../components/common/academicTree';
 import { AcademicTreeControllerHelpers, useAcademicTreeController } from '../../hooks/useAcademicTreeController';
 import { saveBlob } from '../../lib/desktopFiles';
+import { openLessonJournalLinkDialog } from '../../components/common/LessonJournalLink';
 import {
   DOMAIN_SOURCE_TYPE,
   DOMAIN_TREE_KEY_PREFIXES,
@@ -141,35 +142,50 @@ export function useDomainTree({
       });
     },
     onAfterCommit: reloadSubjects,
-    subjectDownloadAction: {
-      visible: (subject) => !!subject.has_source,
-      onDownload: async (subject) => {
-        try {
-          const response = await criteriaApi.downloadSource(
-            DOMAIN_SOURCE_TYPE,
-            subject.year,
-            subject.semester,
-            subject.grade,
-            subject.subject,
-          );
-          await saveBlob(
-            downloadFilename(
-              response.headers['content-disposition'] || '',
-              `${subject.year}_${subject.semester}_${subject.grade}_${subject.subject}_평가영역.xlsx`,
-            ),
-            response.data,
-          );
-        } catch (error: any) {
-          const blob = error?.response?.data;
-          let message = '평가 영역 원본 파일 다운로드에 실패했습니다.';
-          if (blob instanceof Blob && blob.type.includes('application/json')) {
-            try {
-              message = JSON.parse(await blob.text())?.error || message;
-            } catch {}
-          }
-          alert(message);
-        }
+    actions: node => node.kind === 'subject' && node.subject ? [
+      {
+        title: node.subject.has_lesson_source ? '수업 일지 엑셀 연결 관리' : '수업 일지 엑셀 연결',
+        icon: 'link' as const,
+        variant: node.subject.has_lesson_source ? 'blue' as const : 'neutral' as const,
+        visible: 'hover' as const,
+        onClick: () => openLessonJournalLinkDialog({
+          year: node.subject!.year,
+          semester: node.subject!.semester,
+          grade: node.subject!.grade,
+          subject: node.subject!.subject,
+        }),
       },
-    },
+      ...(node.subject.has_source ? [{
+        title: '평가 영역 원본 파일 다운로드',
+        icon: 'download' as const,
+        variant: 'blue' as const,
+        onClick: async () => {
+          const subject = node.subject!;
+          try {
+            const response = await criteriaApi.downloadSource(
+              DOMAIN_SOURCE_TYPE,
+              subject.year,
+              subject.semester,
+              subject.grade,
+              subject.subject,
+            );
+            await saveBlob(
+              downloadFilename(
+                response.headers['content-disposition'] || '',
+                `${subject.year}_${subject.semester}_${subject.grade}_${subject.subject}_평가영역.xlsx`,
+              ),
+              response.data,
+            );
+          } catch (error: any) {
+            const blob = error?.response?.data;
+            let message = '평가 영역 원본 파일 다운로드에 실패했습니다.';
+            if (blob instanceof Blob && blob.type.includes('application/json')) {
+              try { message = JSON.parse(await blob.text())?.error || message; } catch {}
+            }
+            alert(message);
+          }
+        },
+      }] : []),
+    ] : [],
   });
 }

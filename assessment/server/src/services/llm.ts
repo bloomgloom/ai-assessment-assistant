@@ -47,7 +47,7 @@ export interface AiTemperatures {
 }
 
 export type AnthropicEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
-export type AnthropicOutputTask = 'domainManagement' | 'recordsScoring' | 'recordsComments' | 'subjectComprehensive';
+export type AnthropicOutputTask = 'domainManagement' | 'activity' | 'recordsScoring' | 'recordsComments' | 'subjectComprehensive';
 export type GeminiThinkingLevel = 'low' | 'medium' | 'high';
 export type OpenAIReasoningEffort = 'low' | 'medium' | 'high';
 export interface AnthropicOutputOption {
@@ -60,7 +60,7 @@ export interface AnthropicOutputOption {
 export type AnthropicOutputOptions = Record<AnthropicOutputTask, AnthropicOutputOption>;
 
 const ANTHROPIC_EFFORTS = new Set<AnthropicEffort>(['low', 'medium', 'high', 'xhigh', 'max']);
-const ANTHROPIC_OUTPUT_TASKS: AnthropicOutputTask[] = ['domainManagement', 'recordsScoring', 'recordsComments', 'subjectComprehensive'];
+const ANTHROPIC_OUTPUT_TASKS: AnthropicOutputTask[] = ['domainManagement', 'activity', 'recordsScoring', 'recordsComments', 'subjectComprehensive'];
 
 function providerTemperatureMax(provider: string) {
   return provider === 'anthropic' ? 1 : 2;

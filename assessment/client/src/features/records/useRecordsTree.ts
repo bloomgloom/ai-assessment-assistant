@@ -16,19 +16,19 @@ function buildRecordsTree(classes: ClassItem[]): RecordsTreeNode[] {
 
     let sNode = yNode.children!.find(n => n.semester === c.semester);
     if (!sNode) {
-      sNode = { kind: 'semester', semester: c.semester, label: `${c.semester}학기`, children: [], path: `y${c.year}s${c.semester}` };
+      sNode = { kind: 'semester', year: c.year, semester: c.semester, label: `${c.semester}학기`, children: [], path: `y${c.year}s${c.semester}` };
       yNode.children!.push(sNode);
     }
 
     let gNode = sNode.children!.find(n => n.grade === c.grade);
     if (!gNode) {
-      gNode = { kind: 'grade', grade: c.grade, label: `${c.grade}학년`, children: [], path: `y${c.year}s${c.semester}g${c.grade}` };
+      gNode = { kind: 'grade', year: c.year, semester: c.semester, grade: c.grade, label: `${c.grade}학년`, children: [], path: `y${c.year}s${c.semester}g${c.grade}` };
       sNode.children!.push(gNode);
     }
 
     let subNode = gNode.children!.find(n => n.subject === c.subject);
     if (!subNode) {
-      subNode = { kind: 'subject', subject: c.subject, label: c.subject, children: [], path: `y${c.year}s${c.semester}g${c.grade}_${c.subject}` };
+      subNode = { kind: 'subject', year: c.year, semester: c.semester, grade: c.grade, subject: c.subject, label: c.subject, children: [], path: `y${c.year}s${c.semester}g${c.grade}_${c.subject}` };
       gNode.children!.push(subNode);
     }
 

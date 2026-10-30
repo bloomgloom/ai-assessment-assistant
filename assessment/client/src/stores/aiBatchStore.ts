@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { aiApi } from '../lib/api';
+import { aiApi, claudeBatchApi } from '../lib/api';
 import { startDisplaySleepPrevention, stopDisplaySleepPrevention } from '../lib/displaySleepPrevention';
 
 export type BatchContentType = 'scoring' | 'comments' | 'combined' | 'spellcheck';
@@ -106,7 +106,7 @@ export const useAiBatchStore = create<AiBatchState>((set, get) => ({
 
   loadClaudeBatchJobs: async (classId) => {
     try {
-      const res = await aiApi.listClaudeBatchJobs(classId);
+      const res = await claudeBatchApi.list(classId);
       const jobs = (Array.isArray(res.data.jobs) ? res.data.jobs : []) as BatchJob[];
       set((state) => {
         const pendingJobs = state.claudeBatchJobs.filter((job) => job.classId === classId && isPendingClaudeBatchRequest(job));
@@ -434,7 +434,7 @@ export const useAiBatchStore = create<AiBatchState>((set, get) => ({
       ),
     }));
     try {
-      const res = await aiApi.checkClaudeBatchResults(job.providerBatchIds);
+      const res = await claudeBatchApi.receive(job.providerBatchIds);
       const updates = (Array.isArray(res.data.updates) ? res.data.updates : []) as GeneratedContentUpdate[];
       const errors = updates.filter((item) => item.error).length;
       if (res.data.inProgress) {

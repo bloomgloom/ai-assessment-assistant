@@ -24,7 +24,7 @@ const UPLOADS_ROOT = UPLOADS_DIR;
 const router = Router();
 const restoreUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 1024 * 1024 * 1024 } });
 const TEMPERATURE_KEYS = ['domainManagement', 'recordsScoring', 'recordsComments'] as const;
-const ANTHROPIC_OUTPUT_TASKS: AnthropicOutputTask[] = ['domainManagement', 'recordsScoring', 'recordsComments', 'subjectComprehensive'];
+const ANTHROPIC_OUTPUT_TASKS: AnthropicOutputTask[] = ['domainManagement', 'activity', 'recordsScoring', 'recordsComments', 'subjectComprehensive'];
 const ANTHROPIC_EFFORTS = new Set(['low', 'medium', 'high', 'xhigh', 'max']);
 
 function providerTemperatureMax(provider: string) {

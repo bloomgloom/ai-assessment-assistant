@@ -1,13 +1,15 @@
 import { BrowserRouter, Routes, Route, NavLink, Navigate, useLocation } from 'react-router-dom';
 import {
-  Settings, BookOpen, ClipboardList, ListChecks, Loader2, LogOut, Menu
+  Settings, BookOpen, ClipboardList, ListChecks, Loader2, LogOut, Menu, CalendarDays
 } from 'lucide-react';
 import { lazy, Suspense, useEffect, useState } from 'react';
 import SettingsPage from './pages/SettingsPage';
 import CriteriaPage from './pages/CriteriaPage';
 import DomainPage from './pages/DomainPage';
 import RecordsPage from './pages/RecordsPage';
+import ActivityPage from './pages/ActivityPage';
 import { AiGlobalOverlay } from './components/common/AiGlobalOverlay';
+import { LessonJournalLinkDialogHost } from './components/common/LessonJournalLink';
 import { useRecordsUnsavedStore } from './stores/recordsUnsavedStore';
 
 const ArtifactStandalonePage = lazy(() =>
@@ -17,7 +19,7 @@ const ArtifactPreviewStandalonePage = lazy(() =>
   import('./components/ArtifactPreviewModal').then((module) => ({ default: module.ArtifactPreviewStandalonePage }))
 );
 
-const SAVEABLE_PATHS = ['/criteria', '/domains', '/records', '/settings'];
+const SAVEABLE_PATHS = ['/criteria', '/domains', '/activity', '/records', '/settings'];
 
 function LastLocationSaver() {
   const location = useLocation();
@@ -40,6 +42,7 @@ function Sidebar() {
   const links = [
     { to: '/criteria', label: '성취 기준 관리', icon: BookOpen },
     { to: '/domains', label: '평가 영역 관리', icon: ListChecks },
+    { to: '/activity', label: '활동 기록 관리', icon: CalendarDays },
     { to: '/records', label: '채점 기록 관리', icon: ClipboardList },
     { to: '/settings', label: '환경 설정', icon: Settings },
   ];
@@ -130,14 +133,17 @@ export default function App() {
             <>
               <LastLocationSaver />
               <Sidebar />
-              <main className="flex-1 min-w-0 flex flex-col">
+              <main className="flex min-h-0 min-w-0 flex-1 flex-col">
                 <AiGlobalOverlay />
-                <div className="flex-1 overflow-auto">
+                <LessonJournalLinkDialogHost />
+                <div className="min-h-0 min-w-0 flex-1 overflow-auto">
                   <Routes>
                     <Route path="/" element={<Navigate to={localStorage.getItem('lastPath') || '/criteria'} replace />} />
                     <Route path="/settings" element={<SettingsPage />} />
                     <Route path="/criteria" element={<CriteriaPage />} />
                     <Route path="/domains" element={<DomainPage />} />
+                    <Route path="/lesson-plans" element={<Navigate to="/domains" replace />} />
+                    <Route path="/activity" element={<ActivityPage />} />
                     <Route path="/records" element={<RecordsPage />} />
                   </Routes>
                 </div>

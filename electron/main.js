@@ -14,6 +14,7 @@ const DEFAULT_ASSIGNMENT_STUDENT_PORT = 10000;
 
 app.setName('ai-assessment-assistant');
 app.setPath('userData', path.join(app.getPath('appData'), 'ai-assessment-assistant'));
+const hasSingleInstanceLock = app.requestSingleInstanceLock();
 
 let mainWindow = null;
 let serverProcess = null;
@@ -511,6 +512,7 @@ async function createWindow() {
   ipcMain.removeHandler('display-sleep-prevention');
   ipcMain.removeHandler('save-file');
   ipcMain.removeHandler('open-files');
+  ipcMain.removeHandler('open-directory');
   ipcMain.handle('display-sleep-prevention', (event, enabled) => {
     if (!mainWindow || event.sender !== mainWindow.webContents) return false;
     if (enabled && activeMode !== 'assessment') return false;
@@ -543,6 +545,16 @@ async function createWindow() {
         return { name: path.basename(filePath), path: filePath, data };
       }),
     };
+  });
+  ipcMain.handle('open-directory', async (event) => {
+    if (!mainWindow || event.sender !== mainWindow.webContents) return { canceled: true };
+    const { canceled, filePaths } = await dialog.showOpenDialog(mainWindow, {
+      defaultPath: getLastFileDialogDir(),
+      properties: ['openDirectory'],
+    });
+    if (canceled || !filePaths.length) return { canceled: true };
+    rememberFileDialogPath(path.join(filePaths[0], '_selected'));
+    return { canceled: false, path: filePaths[0] };
   });
 
   const windowState = loadWindowState();
@@ -621,7 +633,18 @@ async function createWindow() {
   }
 }
 
-app.whenReady().then(createWindow);
+if (!hasSingleInstanceLock) {
+  isForceQuit = true;
+  app.quit();
+} else {
+  app.on('second-instance', () => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.show();
+    mainWindow.focus();
+  });
+  app.whenReady().then(createWindow);
+}
 
 app.on('window-all-closed', () => {
   setDisplaySleepPrevention(false);

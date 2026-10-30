@@ -3,7 +3,8 @@ export const DOMAIN_GUIDE_KEY = 'hideDomainGuide.v2';
 export const SUBJECT_COMPREHENSIVE_DOMAIN = '__SUBJECT_COMPREHENSIVE__';
 export const DOMAIN_SOURCE_TYPE = 'domains';
 
-export type DomainTab = 'standards' | 'scoring' | 'records' | 'comments' | 'assignment' | 'ratio';
+export type DomainTab = 'standards' | 'scoring' | 'records' | 'comments' | 'assignment' | 'ratio'
+  | 'lesson-plans' | 'activity-records' | 'activity-summary';
 
 export const DOMAIN_TREE_KEY_PREFIXES = {
   year: 'dy',
@@ -38,6 +39,9 @@ export const DOMAIN_TAB_TEXT = {
   },
   subjectTabs: {
     ratio: { value: 'ratio', label: '반영비율/만점관리', color: 'green' },
+    lessonPlans: { value: 'lesson-plans', label: '차시별 진도계획', color: 'green' },
+    activityRecords: { value: 'activity-records', label: '활동기록 기준', color: 'blue' },
+    activitySummary: { value: 'activity-summary', label: '활동종합 기준', color: 'purple' },
   },
 } as const;
 

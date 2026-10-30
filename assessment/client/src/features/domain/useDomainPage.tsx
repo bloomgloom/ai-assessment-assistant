@@ -1,13 +1,19 @@
-import { Award, BookOpen, ClipboardCheck, Download, FileText, Save, School, Sparkles, Upload } from 'lucide-react';
+import { Award, BookOpen, CalendarRange, ClipboardCheck, Download, FileText, RefreshCw, Save, School, Sparkles, Upload } from 'lucide-react';
 import { PageHeaderAction } from '../../components/common/PageHeaderActions';
 import { PageTab } from '../../components/common/PageTabs';
 import { DOMAIN_PAGE_TEXT, DOMAIN_TAB_TEXT, DomainTab } from './constants';
 import { useDomainController } from './useDomainController';
 import { useAiEnabled } from '../../hooks/useAiEnabled';
+import { useRecordsUnsavedStore } from '../../stores/recordsUnsavedStore';
+import { useEffect } from 'react';
+import { subscribeLessonJournalLinkChanged } from '../../components/common/LessonJournalLink';
 
 export function useDomainPage() {
   const domain = useDomainController();
   const aiEnabled = useAiEnabled();
+  const hasUnsavedChanges = useRecordsUnsavedStore(state => state.hasUnsavedChanges);
+  const lessonTab = ['lesson-plans', 'activity-records', 'activity-summary'].includes(domain.activeTab);
+  useEffect(() => subscribeLessonJournalLinkChanged(() => { void domain.reloadSubjects(); }), [domain.reloadSubjects]);
 
   const domainTabs: PageTab<DomainTab>[] = [
     { ...DOMAIN_TAB_TEXT.domainTabs.standards, icon: <Award size={14} /> },
@@ -23,17 +29,49 @@ export function useDomainPage() {
   ];
   const subjectTabs: PageTab<DomainTab>[] = [
     { ...DOMAIN_TAB_TEXT.subjectTabs.ratio, icon: <ClipboardCheck size={14} /> },
+    { ...DOMAIN_TAB_TEXT.subjectTabs.lessonPlans, icon: <CalendarRange size={14} /> },
+    { ...DOMAIN_TAB_TEXT.subjectTabs.activityRecords, icon: <BookOpen size={14} /> },
+    { ...DOMAIN_TAB_TEXT.subjectTabs.activitySummary, icon: <Sparkles size={14} /> },
   ];
   const headerActions: PageHeaderAction[] = [
-    ...(domain.selectedSubject ? [{
+    ...(domain.selectedSubject && lessonTab ? [
+      ...([{
+        key: 'lesson-refresh', icon: <RefreshCw size={14} />,
+        onClick: () => window.dispatchEvent(new Event('lesson-plan-refresh')),
+        title: '새로고침', ariaLabel: '새로고침',
+      }]),
+      {
+        key: 'lesson-save', variant: 'primary' as const, label: '저장', icon: <Save size={14} />,
+        onClick: () => window.dispatchEvent(new Event('lesson-plan-save')),
+        title: '저장', ariaLabel: '저장',
+      },
+      {
+        key: 'lesson-download', variant: 'success' as const, icon: <Download size={14} />,
+        onClick: () => window.dispatchEvent(new Event('lesson-plan-download')),
+        title: '차시별 진도계획 다운로드', ariaLabel: '차시별 진도계획 다운로드',
+      },
+      {
+        key: 'lesson-backup-upload', icon: <Upload size={14} />,
+        onClick: () => window.dispatchEvent(new Event('lesson-plan-backup-upload')),
+        title: '복원', ariaLabel: '수업 계획 복원',
+      },
+      {
+        key: 'lesson-backup-download', icon: <Download size={14} />,
+        onClick: () => window.dispatchEvent(new Event('lesson-plan-backup-download')),
+        title: '백업', ariaLabel: '수업 계획 백업',
+      },
+    ] : []),
+    ...(domain.selectedSubject && !lessonTab ? [{
       key: 'save',
       variant: 'primary' as const,
       label: domain.saving ? DOMAIN_PAGE_TEXT.savingLabel : DOMAIN_PAGE_TEXT.saveLabel,
       icon: <Save size={14} />,
       onClick: domain.handleSave,
       disabled: domain.saving,
+      title: DOMAIN_PAGE_TEXT.saveLabel,
+      ariaLabel: DOMAIN_PAGE_TEXT.saveLabel,
     }] : []),
-    {
+    ...(!lessonTab ? [{
       key: 'upload-config',
       type: 'file',
       icon: <Upload size={14} />,
@@ -42,15 +80,15 @@ export function useDomainPage() {
       onChange: domain.handleUploadConfig,
       loading: domain.uploadingConfig,
       disabled: domain.uploadingConfig,
-      title: DOMAIN_PAGE_TEXT.uploadConfigTitle,
-      ariaLabel: DOMAIN_PAGE_TEXT.uploadConfigTitle,
-    },
-    ...(domain.selectedSubject ? [{
+      title: '복원',
+      ariaLabel: '평가 영역 복원',
+    } as PageHeaderAction] : []),
+    ...(domain.selectedSubject && !lessonTab ? [{
       key: 'download-config',
       icon: <Download size={14} />,
       onClick: domain.handleDownloadConfig,
-      title: DOMAIN_PAGE_TEXT.downloadConfigTitle,
-      ariaLabel: DOMAIN_PAGE_TEXT.downloadConfigTitle,
+      title: '백업',
+      ariaLabel: '평가 영역 백업',
     }] : []),
   ];
 
@@ -60,16 +98,7 @@ export function useDomainPage() {
       upload: {
         label: DOMAIN_PAGE_TEXT.uploadLabel,
         loading: domain.uploadingDomains,
-        input: (
-          <input
-            ref={domain.domainsFileRef}
-            type="file"
-            className="hidden"
-            accept=".xlsx,.xls"
-            onChange={domain.handleDomainsUpload}
-            disabled={domain.uploadingDomains}
-          />
-        ),
+        input: <input ref={domain.domainsFileRef} type="file" className="hidden" accept=".xlsx,.xls" onChange={domain.handleDomainsUpload} disabled={domain.uploadingDomains}/>,
       },
       notices: [
         {
@@ -109,7 +138,10 @@ export function useDomainPage() {
     tabs: domain.selectedSubject ? {
       value: domain.activeTab,
       tabs: domain.selectedDomain ? domainTabs : subjectTabs,
-      onChange: domain.setActiveTab,
+      onChange: (value: DomainTab) => {
+        if (value !== domain.activeTab && hasUnsavedChanges && !confirm('저장되지 않은 변경 사항이 있습니다. 이동하시겠습니까?')) return;
+        domain.setActiveTab(value);
+      },
     } : undefined,
     contentProps: {
       selectedSubject: domain.selectedSubject,

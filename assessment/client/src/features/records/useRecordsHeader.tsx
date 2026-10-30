@@ -1,6 +1,7 @@
-import { RefObject, useState } from 'react';
+import { RefObject } from 'react';
 import { Download, Save, Trash2, Upload } from 'lucide-react';
 import { PageHeaderAction } from '../../components/common/PageHeaderActions';
+import { ExecutionModeMenu, HeaderFilterSelect, HeaderImportMenu, HeaderViewToggleGroup } from '../../components/common/HeaderViewControls';
 import { ClassItem } from './types';
 
 interface UseRecordsHeaderOptions {
@@ -19,8 +20,8 @@ interface UseRecordsHeaderOptions {
   domainFilter: string;
   setDomainFilter: (value: string) => void;
   uploadingZip: boolean;
-  fileInputRef: RefObject<HTMLInputElement>;
-  handleBulkZipUpload: (e: React.ChangeEvent<HTMLInputElement>) => void;
+  handleBulkZipUpload: (file: File) => void;
+  handleBulkFolderUpload: (folderPath: string) => void;
   handleGenerateSelected: () => void;
   handleStartClaudeBatch: () => void;
   handleOpenClaudeBatchResults: () => void;
@@ -59,8 +60,8 @@ export function useRecordsHeader({
   domainFilter,
   setDomainFilter,
   uploadingZip,
-  fileInputRef,
   handleBulkZipUpload,
+  handleBulkFolderUpload,
   handleGenerateSelected,
   handleStartClaudeBatch,
   handleOpenClaudeBatchResults,
@@ -82,17 +83,11 @@ export function useRecordsHeader({
   aiEnabled,
   claudeBatchAvailable,
 }: UseRecordsHeaderOptions) {
-  const [closedExecutionMenu, setClosedExecutionMenu] = useState<string | null>(null);
   const showDomainControls = showScoring || showComments;
   const invalidComprehensiveMix = showComprehensive && (showScoring || showComments);
-  const showGenerationActions = (showScoring || showComments || showComprehensive) && !invalidComprehensiveMix;
+  const showGenerationActions = (showScoring !== showComments || showComprehensive) && !invalidComprehensiveMix;
   const showSpellcheckAction = showComprehensive && !showScoring && !showComments;
   const generationLabel = showScoring ? '채점' : '작성';
-  const toggleButtonClassName = (active: boolean, enabled = true) =>
-    `px-3 py-1 text-xs font-medium rounded transition-colors whitespace-nowrap ${!enabled ? 'opacity-40 cursor-not-allowed text-gray-400' :
-      active ? 'bg-white shadow text-blue-600' : 'text-gray-500 hover:text-gray-700'
-      }`;
-
   const toggleView = (target: 'scoring' | 'comments' | 'comprehensive') => {
     const nextScoring = target === 'scoring' ? !showScoring : showScoring;
     const nextComments = target === 'comments' ? !showComments : showComments;
@@ -105,32 +100,17 @@ export function useRecordsHeader({
 
   const leading = selectedClass ? (
     <div className="flex min-w-0 items-center gap-2">
-      <div className="flex shrink-0 bg-gray-100 p-1 rounded gap-1 border border-gray-200">
-        <button
-          className={toggleButtonClassName(showScoring, canShowScoring)}
-          disabled={!canShowScoring}
-          onClick={() => toggleView('scoring')}
-        >
-          채점
-        </button>
-        <button
-          className={toggleButtonClassName(showComments, canShowComments)}
-          disabled={!canShowComments}
-          onClick={() => toggleView('comments')}
-        >
-          기록
-        </button>
-        <button
-          className={toggleButtonClassName(showComprehensive)}
-          onClick={() => toggleView('comprehensive')}
-        >
-          세특
-        </button>
-      </div>
+      <HeaderViewToggleGroup
+        options={[
+          { value: 'scoring', label: '채점', active: showScoring, enabled: canShowScoring },
+          { value: 'comments', label: '기록', active: showComments, enabled: canShowComments },
+          { value: 'comprehensive', label: '세특', active: showComprehensive },
+        ]}
+        onToggle={toggleView}
+      />
 
       {showDomainControls && (
-        <select
-          className="input w-[15rem] min-w-0 shrink text-xs py-1.5 px-2 bg-gray-50 font-medium text-gray-700"
+        <HeaderFilterSelect
           value={domainFilter}
           onChange={(e) => setDomainFilter(e.target.value)}
         >
@@ -144,7 +124,7 @@ export function useRecordsHeader({
           {showComments && selectedSubject?.customDomains.map((d: any) => (
             <option key={d.name} value={d.name}>{d.name} (기록)</option>
           ))}
-        </select>
+        </HeaderFilterSelect>
       )}
     </div>
   ) : undefined;
@@ -158,8 +138,8 @@ export function useRecordsHeader({
     accept: '.xlsx,.xls',
     onChange: handleImportFullRecords,
     disabled: uploadingFullRecords,
-    title: '작업 내용 업로드',
-    ariaLabel: '작업 내용 업로드',
+    title: '복원',
+    ariaLabel: '채점 기록 복원',
   };
 
   const renderExecutionMenu = ({
@@ -178,77 +158,23 @@ export function useRecordsHeader({
     disabled: boolean;
     immediateTitle: string;
     batchTitle: string;
-  }) => {
-    const menuClosed = closedExecutionMenu === menuKey;
-    const runAction = (event: React.MouseEvent<HTMLButtonElement>, action: () => void) => {
-      event.currentTarget.blur();
-      setClosedExecutionMenu(menuKey);
-      window.setTimeout(action, 0);
-    };
-
-    return (
-    <div
-      className="group relative h-9"
-      onMouseLeave={() => setClosedExecutionMenu(current => current === menuKey ? null : current)}
-    >
-      <button
-        type="button"
-        className="btn-rainbow h-9 px-4 text-sm"
-        disabled={disabled}
-        aria-haspopup="menu"
-        title={`${label} 방식 선택`}
-        onFocus={() => setClosedExecutionMenu(current => current === menuKey ? null : current)}
-      >
-        {label}
-      </button>
-      <div
-        className={`absolute right-0 top-[calc(100%-1px)] z-50 min-w-full pt-1 transition-opacity ${
-          menuClosed
-            ? 'invisible opacity-0'
-            : 'invisible opacity-0 group-hover:visible group-hover:opacity-100 group-focus-within:visible group-focus-within:opacity-100'
-        }`}
-        role="menu"
-      >
-        <div className="flex flex-col overflow-hidden rounded-md border border-gray-200 bg-white py-1 shadow-lg">
-          <button
-            type="button"
-            className="whitespace-nowrap px-4 py-2 text-center text-xs text-gray-700 hover:bg-blue-50 hover:text-blue-700 disabled:cursor-not-allowed disabled:text-gray-300 disabled:hover:bg-white"
-            onClick={event => runAction(event, onImmediate)}
-            disabled={disabled}
-            title={immediateTitle}
-            role="menuitem"
-          >
-            즉시
-          </button>
-          <button
-            type="button"
-            className="whitespace-nowrap px-4 py-2 text-center text-xs text-gray-700 hover:bg-blue-50 hover:text-blue-700 disabled:cursor-not-allowed disabled:text-gray-300 disabled:hover:bg-white"
-            onClick={event => runAction(event, onBatch)}
-            disabled={disabled || !claudeBatchAvailable}
-            title={claudeBatchAvailable ? batchTitle : 'Claude 공급자에서만 사용할 수 있습니다.'}
-            role="menuitem"
-          >
-            배치
-          </button>
-        </div>
-      </div>
-    </div>
-    );
-  };
+  }) => <ExecutionModeMenu
+    key={menuKey}
+    label={label}
+    onImmediate={onImmediate}
+    onBatch={onBatch}
+    disabled={disabled}
+    batchDisabled={!claudeBatchAvailable}
+    immediateTitle={immediateTitle}
+    batchTitle={claudeBatchAvailable ? batchTitle : 'Claude 공급자에서만 사용할 수 있습니다.'}
+  />;
 
   const actions: PageHeaderAction[] = [
     ...(!selectedClass ? [restoreAction] : [
     ...(showDomainControls && domainFilter !== 'all' ? [{
-      key: 'bulk-zip-upload',
-      type: 'file' as const,
-      variant: 'primary' as const,
-      label: '업로드',
-      icon: <Upload size={14} />,
-      loading: uploadingZip,
-      inputRef: fileInputRef,
-      accept: '.zip',
-      onChange: handleBulkZipUpload,
-      disabled: uploadingZip,
+      key: 'bulk-artifact-upload',
+      type: 'custom' as const,
+      render: () => <HeaderImportMenu loading={uploadingZip} disabled={uploadingZip} onZip={handleBulkZipUpload} onFolder={handleBulkFolderUpload}/>,
     }] : []),
     ...(showGenerationActions ? [{
       key: 'generation-actions',
@@ -278,25 +204,10 @@ export function useRecordsHeader({
     }] : []),
     ...(claudeBatchJobCount > 0 ? [{
       key: 'claude-batch-results',
-      label: `결과 ${claudeBatchJobCount}`,
+      label: `결과 (${claudeBatchJobCount})`,
       onClick: handleOpenClaudeBatchResults,
       title: 'Claude 배치 결과 확인',
     }] : []),
-    ...((showScoring && !showComments && !showComprehensive) || (!showScoring && !showComments && showComprehensive) ? [{
-      key: 'export-current',
-      variant: 'success' as const,
-      label: '다운로드',
-      icon: <Download size={14} />,
-      onClick: () => handleExport(showScoring ? 'scoring' : 'comments'),
-    }] : []),
-    {
-      key: 'delete',
-      variant: 'danger' as const,
-      label: deleting ? '삭제 중...' : '삭제',
-      icon: <Trash2 size={14} />,
-      onClick: handleDeleteContent,
-      disabled: deleting || saving || batchGenerating,
-    },
     {
       key: 'save',
       variant: 'primary' as const,
@@ -304,14 +215,34 @@ export function useRecordsHeader({
       icon: <Save size={14} />,
       onClick: handleSaveAll,
       disabled: saving,
+      title: '저장',
+      ariaLabel: '저장',
     },
+    {
+      key: 'delete',
+      variant: 'danger' as const,
+      icon: <Trash2 size={14} />,
+      onClick: handleDeleteContent,
+      disabled: deleting || saving || batchGenerating,
+      loading: deleting,
+      title: '선택한 행의 내용 삭제',
+      ariaLabel: '선택한 행의 내용 삭제',
+    },
+    ...((showScoring && !showComments && !showComprehensive) || (!showScoring && !showComments && showComprehensive) ? [{
+      key: 'export-current',
+      variant: 'success' as const,
+      icon: <Download size={14} />,
+      onClick: () => handleExport(showScoring ? 'scoring' : 'comments'),
+      title: '현재 기록 다운로드',
+      ariaLabel: '현재 기록 다운로드',
+    }] : []),
     restoreAction,
     {
       key: 'export-full',
       icon: <Download size={14} />,
       onClick: handleExportFullRecords,
-      title: '작업 내용 다운로드',
-      ariaLabel: '작업 내용 다운로드',
+      title: '백업',
+      ariaLabel: '채점 기록 백업',
     },
     ]),
   ];

@@ -215,7 +215,7 @@ export const artifactsApi = {
   getByStudent: (studentId: number) => api.get(`/artifacts/student/${studentId}`),
   getByDomain: (studentId: number, domain: string) =>
     api.get(`/artifacts/student/${studentId}/domain/${encodeURIComponent(domain)}`),
-  upload: (studentId: number, domain: string, files: FileList) => {
+  upload: (studentId: number, domain: string, files: FileList | File[]) => {
     const form = new FormData();
     form.append('domain', domain);
     Array.from(files).forEach((f) => form.append('files', f));
@@ -301,6 +301,86 @@ export const classesApi = {
     api.post(`/classes/${classId}/sync-session/${sessionId}`),
 };
 
+export interface AcademicSubjectScope {
+  year: number;
+  semester: number;
+  grade: number;
+  subject: string;
+}
+
+export const lessonPlansApi = {
+  getSubjects: () => api.get('/lesson-plans/subjects', { params: { t: Date.now() } }),
+  getSettings: (scope: AcademicSubjectScope) => api.get(`/lesson-plans/settings/${encodeURIComponent(scope.subject)}`, { params: scope }),
+  getArtifactSourceFolder: (scope: AcademicSubjectScope) => api.get(`/lesson-plans/artifact-source-folder/${encodeURIComponent(scope.subject)}`, { params: scope }),
+  setArtifactSourceFolder: (scope: AcademicSubjectScope, folderPath: string) =>
+    api.put(`/lesson-plans/artifact-source-folder/${encodeURIComponent(scope.subject)}`, { ...scope, folderPath }),
+  clearArtifactSourceFolder: (scope: AcademicSubjectScope) =>
+    api.delete(`/lesson-plans/artifact-source-folder/${encodeURIComponent(scope.subject)}`, { params: scope }),
+  saveSettings: (scope: AcademicSubjectScope, settings: Record<string, unknown>) =>
+    api.put(`/lesson-plans/settings/${encodeURIComponent(scope.subject)}`, { ...scope, ...settings }),
+  getPlans: (scope: AcademicSubjectScope) => api.get(`/lesson-plans/plans/${encodeURIComponent(scope.subject)}`, { params: scope }),
+  savePlans: (scope: AcademicSubjectScope, rows: unknown[]) =>
+    api.put(`/lesson-plans/plans/${encodeURIComponent(scope.subject)}`, { ...scope, rows }),
+  uploadSource: (scope: AcademicSubjectScope, file: File) => {
+    const form = new FormData();
+    form.append('file', file);
+    Object.entries(scope).forEach(([key, value]) => form.append(key, String(value)));
+    return api.post('/lesson-plans/source-file', form);
+  },
+  linkSourcePath: (scope: AcademicSubjectScope, filepath: string) => api.put('/lesson-plans/source-file', { ...scope, filepath }),
+  downloadSource: (scope: AcademicSubjectScope) => api.get('/lesson-plans/source-file', { params: scope, responseType: 'blob' }),
+  deleteSource: (scope: AcademicSubjectScope) => api.delete('/lesson-plans/source-file', { params: scope }),
+  exportPlan: (scope: AcademicSubjectScope) => api.get('/lesson-plans/export/plan', { params: scope, responseType: 'blob' }),
+  exportJournal: (scope: AcademicSubjectScope) => api.get('/lesson-plans/export/journal', { params: scope, responseType: 'blob' }),
+  exportBackup: (scope: AcademicSubjectScope) => api.get('/lesson-plans/backup/export', { params: scope, responseType: 'blob' }),
+  importBackup: (scope: AcademicSubjectScope, file: File) => {
+    const form = new FormData();
+    form.append('file', file);
+    Object.entries(scope).forEach(([key, value]) => form.append(key, String(value)));
+    return api.post('/lesson-plans/backup/upload', form);
+  },
+};
+
+export const claudeBatchApi = {
+  list: (classId: number) => api.get('/ai/claude-batch-jobs', { params: { classId } }),
+  receive: (batchIds: string[]) => api.post('/ai/claude-batch-results', { batchIds }),
+};
+
+export const activityApi = {
+  getDates: (classId: number) => api.get(`/activity/${classId}/dates`, { params: { t: Date.now() } }),
+  addDate: (classId: number, data: Record<string, unknown>) => api.post(`/activity/${classId}/dates`, data),
+  updateDate: (classId: number, id: number, data: Record<string, unknown>) => api.patch(`/activity/${classId}/dates/${id}`, data),
+  deleteDate: (classId: number, id: number) => api.delete(`/activity/${classId}/dates/${id}`),
+  getTable: (classId: number, date: string) => api.get(`/activity/${classId}/table`, { params: { date, t: Date.now() } }),
+  saveSummary: (classId: number, data: { studentId: number; date: string; summary: string }) => api.put(`/activity/${classId}/summaries`, data),
+  saveObservation: (classId: number, data: { studentId: number; date: string; isAbsent: boolean; note: string }) => api.put(`/activity/${classId}/observations`, data),
+  deleteContent: (classId: number, data: { studentIds: number[]; dates: string[]; views: string[] }) => api.delete(`/activity/${classId}/content`, { data }),
+  uploadFiles: (classId: number, studentId: number, date: string, files: File[]) => {
+    const form = new FormData();
+    form.append('studentId', String(studentId));
+    form.append('date', date);
+    files.forEach(file => form.append('files', file));
+    return api.post(`/activity/${classId}/files`, form);
+  },
+  importFolder: (classId: number, folderPath: string, selectedDate: string, allowDateFolders = false) => api.post(`/activity/${classId}/import`, { folderPath, selectedDate, allowDateFolders }),
+  importZip: (classId: number, file: File, selectedDate: string, allowDateFolders = false) => {
+    const form = new FormData();
+    form.append('file', file);
+    form.append('selectedDate', selectedDate);
+    form.append('allowDateFolders', String(allowDateFolders));
+    return api.post(`/activity/${classId}/import`, form);
+  },
+  getPending: (classId: number) => api.get(`/activity/${classId}/pending`, { params: { t: Date.now() } }),
+  generate: (classId: number, data: { targets?: Array<{ studentId: number; activityDateId: number }>; mode?: 'date' | 'semester' }) =>
+    api.post(`/activity/${classId}/generate`, data),
+  startBatch: (classId: number, data: { targets?: Array<{ studentId: number; activityDateId: number }>; mode?: 'date' | 'semester' }) =>
+    api.post(`/activity/${classId}/batch`, data, { timeout: CLAUDE_BATCH_SUBMIT_TIMEOUT_MS }),
+  listBatchJobs: claudeBatchApi.list,
+  checkBatchResults: claudeBatchApi.receive,
+  getSemesterSummaries: (classId: number) => api.get(`/activity/${classId}/semester-summaries`, { params: { t: Date.now() } }),
+  fileUrl: (id: number) => `/api/activity/files/${id}`,
+};
+
 // AI
 export const aiApi = {
   generate: (data: {
@@ -326,6 +406,6 @@ export const aiApi = {
     classId: number;
     items: Array<{ studentId: number; text: string }>;
   }) => api.post('/ai/spellcheck-claude-batch', data, { timeout: CLAUDE_BATCH_SUBMIT_TIMEOUT_MS }),
-  listClaudeBatchJobs: (classId: number) => api.get('/ai/claude-batch-jobs', { params: { classId } }),
-  checkClaudeBatchResults: (batchIds: string[]) => api.post('/ai/claude-batch-results', { batchIds }),
+  listClaudeBatchJobs: claudeBatchApi.list,
+  checkClaudeBatchResults: claudeBatchApi.receive,
 };

@@ -11,6 +11,8 @@ import recordsRouter from './routes/records';
 import artifactsRouter from './routes/artifacts';
 import aiRouter from './routes/ai';
 import assignmentConfigsRouter from './routes/assignmentConfigs';
+import lessonPlansRouter from './routes/lessonPlans';
+import activityRouter from './routes/activity';
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -34,6 +36,8 @@ app.use('/api/records', recordsRouter);
 app.use('/api/artifacts', artifactsRouter);
 app.use('/api/ai', aiRouter);
 app.use('/api/assignment-configs', assignmentConfigsRouter);
+app.use('/api/lesson-plans', lessonPlansRouter);
+app.use('/api/activity', activityRouter);
 
 // 프로덕션: 빌드된 클라이언트 서빙
 const clientDist = path.join(__dirname, '../../client/dist');

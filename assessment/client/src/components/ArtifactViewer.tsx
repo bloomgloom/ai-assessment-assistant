@@ -1,8 +1,9 @@
 import { lazy, Suspense, useState, useEffect } from 'react';
 import { useParams } from 'react-router-dom';
 import { artifactsApi, assignmentConfigsApi } from '../lib/api';
-import { downloadUrl, filesToInputChangeEvent, hasDesktopFileDialogs, openFiles } from '../lib/desktopFiles';
-import { Upload, X, Loader2, Download } from 'lucide-react';
+import { downloadUrl } from '../lib/desktopFiles';
+import { X, Loader2, Download } from 'lucide-react';
+import { artifactExtension, CompactArtifactBadge, CompactArtifactCell } from './common/CompactArtifactCell';
 
 const ArtifactPreviewModal = lazy(() => import('./ArtifactPreviewModal'));
 const ArtifactPreviewContent = lazy(() => import('./ArtifactPreviewContent'));
@@ -17,40 +18,10 @@ interface Artifact {
   source?: 'artifact' | 'assignment';
 }
 
-function getExt(filename: string): string {
-  return filename.split('.').pop()?.toLowerCase() || '';
-}
-
-function getExtLabel(filename: string): string {
-  return (filename.split('.').pop() || 'FILE').toUpperCase();
-}
-
-function extBadgeClass(filename: string): string {
-  switch (getExt(filename)) {
-    case 'py':   return 'bg-blue-100 text-blue-700 border-blue-300';
-    case 'c':
-    case 'cpp':
-    case 'h':    return 'bg-purple-100 text-purple-700 border-purple-300';
-    case 'pdf':  return 'bg-red-100 text-red-700 border-red-300';
-    case 'html': return 'bg-orange-100 text-orange-700 border-orange-300';
-    case 'hwpx': return 'bg-teal-100 text-teal-700 border-teal-300';
-    case 'csv':  return 'bg-emerald-100 text-emerald-700 border-emerald-300';
-    case 'ipynb': return 'bg-indigo-100 text-indigo-700 border-indigo-300';
-    case 'java': return 'bg-red-100 text-red-800 border-red-300';
-    case 'js':
-    case 'ts':
-    case 'jsx':
-    case 'tsx':  return 'bg-yellow-100 text-yellow-800 border-yellow-300';
-    case 'json': return 'bg-gray-100 text-gray-700 border-gray-300';
-    case 'sql':  return 'bg-green-100 text-green-700 border-green-300';
-    default:     return 'bg-gray-100 text-gray-500 border-gray-300';
-  }
-}
-
-function isCodeFile(f: string) { return ['js','jsx','ts','tsx','py','c','cpp','h','java','css','sql','json','md','txt'].includes(getExt(f)); }
+function isCodeFile(f: string) { return ['js','jsx','ts','tsx','py','c','cpp','h','java','css','sql','json','md','txt'].includes(artifactExtension(f)); }
 
 function sortArtifacts(a: Artifact, b: Artifact) {
-  const extCompare = getExt(a.filename).localeCompare(getExt(b.filename), 'ko');
+  const extCompare = artifactExtension(a.filename).localeCompare(artifactExtension(b.filename), 'ko');
   if (extCompare !== 0) return extCompare;
   return a.filename.localeCompare(b.filename, 'ko', { numeric: true });
 }
@@ -72,17 +43,16 @@ export default function ArtifactViewer({ studentId, domain }: ArtifactViewerProp
 
   useEffect(() => { loadArtifacts(); }, [studentId, domain]);
 
-  const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (!e.target.files?.length) return;
+  const handleUpload = async (files: File[]) => {
+    if (!files.length) return;
     setUploading(true);
     try {
-      await artifactsApi.upload(studentId, domain, e.target.files);
+      await artifactsApi.upload(studentId, domain, files);
       await loadArtifacts();
     } catch (err: any) {
       alert(`파일 업로드 실패: ${err?.response?.data?.error || err.message || String(err)}`);
     } finally {
       setUploading(false);
-      e.target.value = '';
     }
   };
 
@@ -102,17 +72,10 @@ export default function ArtifactViewer({ studentId, domain }: ArtifactViewerProp
   };
 
   return (
-    <div className="flex flex-wrap gap-1.5 items-center justify-center">
-      {/* 파일 배지 */}
-      {artifacts.map((a) => (
+    <>
+      <CompactArtifactCell files={artifacts} fileKey={a => `${a.source || 'artifact'}:${a.id}`} uploading={uploading} onUpload={handleUpload} renderFile={a => (
         <div key={`${a.source || 'artifact'}:${a.id}`} className="relative group">
-          <button
-            className={`px-2 py-0.5 text-[11px] font-bold rounded border cursor-pointer whitespace-nowrap ${extBadgeClass(a.filename)}`}
-            onClick={() => setViewing(a)}
-            title={a.filepath ? `${a.filename}\n저장 위치: ${a.filepath}` : a.filename}
-          >
-            {getExtLabel(a.filename)}
-          </button>
+          <CompactArtifactBadge file={a} onClick={() => setViewing(a)} title={a.filepath ? `${a.filename}\n저장 위치: ${a.filepath}` : a.filename}/>
           <button
             className="absolute -top-1.5 -right-1.5 hidden group-hover:flex items-center justify-center w-3.5 h-3.5 rounded-full bg-red-500 text-white"
             onClick={() => handleDelete(a)}
@@ -120,36 +83,12 @@ export default function ArtifactViewer({ studentId, domain }: ArtifactViewerProp
             <X size={8} />
           </button>
         </div>
-      ))}
-
-      {/* 업로드 버튼 (아이콘만) */}
-      {hasDesktopFileDialogs() ? (
-        <button
-          type="button"
-          className={`flex items-center justify-center w-6 h-6 rounded border border-dashed ${
-            uploading ? 'border-gray-300 text-gray-300' : 'border-blue-300 text-blue-500 hover:bg-blue-50'
-          }`}
-          onClick={async () => {
-            const files = await openFiles({ multiple: true });
-            if (files?.length) handleUpload(filesToInputChangeEvent(files) as any);
-          }}
-          disabled={uploading}
-        >
-          {uploading ? <Loader2 size={12} className="animate-spin" /> : <Upload size={12} />}
-        </button>
-      ) : (
-      <label className={`flex items-center justify-center w-6 h-6 rounded cursor-pointer border border-dashed ${
-        uploading ? 'border-gray-300 text-gray-300' : 'border-blue-300 text-blue-500 hover:bg-blue-50'
-      }`}>
-        {uploading ? <Loader2 size={12} className="animate-spin" /> : <Upload size={12} />}
-        <input type="file" className="hidden" multiple onChange={handleUpload} disabled={uploading} />
-      </label>
-      )}
+      )}/>
 
       <Suspense fallback={null}>
         <ArtifactPreviewModal artifact={viewing} onClose={() => setViewing(null)} />
       </Suspense>
-    </div>
+    </>
   );
 }
 

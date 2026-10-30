@@ -7,7 +7,7 @@ export interface AiTemperatures {
 }
 
 export type AnthropicEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
-export type AnthropicOutputTask = 'domainManagement' | 'recordsScoring' | 'recordsComments' | 'subjectComprehensive';
+export type AnthropicOutputTask = 'domainManagement' | 'activity' | 'recordsScoring' | 'recordsComments' | 'subjectComprehensive';
 export type GeminiThinkingLevel = 'low' | 'medium' | 'high';
 export type OpenAIReasoningEffort = 'low' | 'medium' | 'high';
 

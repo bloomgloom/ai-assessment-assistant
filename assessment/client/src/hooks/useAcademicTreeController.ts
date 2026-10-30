@@ -19,7 +19,7 @@ export interface AcademicTreeControllerHelpers<TSubject> {
 
 interface AcademicTreeAction<TSubject> {
   title: string;
-  icon: 'download' | 'trash';
+  icon: 'download' | 'file' | 'link' | 'trash';
   variant?: 'neutral' | 'blue' | 'red' | 'green' | 'purple';
   visible?: 'always' | 'hover' | 'hidden';
   onClick: (node: AcademicTreeNode<TSubject>) => void;

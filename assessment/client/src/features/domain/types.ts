@@ -7,6 +7,7 @@ export interface SubjectItem {
   fixedDomains: { name: string; max_score: number; sort_order: number }[];
   customDomains: { id: number; name: string }[];
   has_source?: number;
+  has_lesson_source?: number;
 }
 
 export interface AssignmentResource {
