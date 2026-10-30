@@ -14,13 +14,14 @@ import { ClaudeBatchResultsDialog, type ClaudeBatchResultJob } from '../componen
 import { RecordsCollapsedTree } from '../features/records/RecordsCollapsedTree';
 import { useRecordsTree } from '../features/records/useRecordsTree';
 import type { ClassItem, RecordsTreeNode } from '../features/records/types';
-import { activityApi, classesApi, claudeBatchApi, lessonPlansApi, type AcademicSubjectScope } from '../lib/api';
+import { activityApi, classesApi, lessonPlansApi, type AcademicSubjectScope } from '../lib/api';
 import { openDirectory, saveBlob } from '../lib/desktopFiles';
+import { useAiBatchStore, type ActivityGenerationRequest } from '../stores/aiBatchStore';
 import { useRecordsUnsavedStore } from '../stores/recordsUnsavedStore';
 
 interface ActivityDate { id: number; activity_date: string; lesson_no: number; progress: string; journal: string; source_mode: string; pending_file_count: number; updated_at?: string }
 interface ActivityFile { id: number; filename: string; summarized_at: string }
-interface StudentRow { id: number; student_num: number; name: string; summary: string; saved_summary: string; is_absent: number; observation: string; topic: string; plus_text: string; minus_text: string; interesting_text: string; semester_summary?: string; files: ActivityFile[] }
+interface StudentRow { id: number; student_num: number; name: string; summary: string; saved_summary: string; manually_edited?: number; is_absent: number; observation: string; topic: string; plus_text: string; minus_text: string; interesting_text: string; semester_summary?: string; files: ActivityFile[] }
 interface PlanRow { lessonNo: number; progress: string }
 type ActivityView = 'activity' | 'observation' | 'reflection' | 'comprehensive';
 const ArtifactPreviewModal = lazy(() => import('../components/ArtifactPreviewModal'));
@@ -51,11 +52,14 @@ export default function ActivityPage() {
   const [linkedSubjects, setLinkedSubjects] = useState<Record<string, boolean>>({});
   const [previewArtifact, setPreviewArtifact] = useState<PreviewArtifact | null>(null);
   const [uploadingCell, setUploadingCell] = useState('');
-  const [batchJobs, setBatchJobs] = useState<ClaudeBatchResultJob[]>([]);
   const [showBatchResults, setShowBatchResults] = useState(false);
   const [receivingBatchId, setReceivingBatchId] = useState('');
+  const [generatedCells, setGeneratedCells] = useState<Set<string>>(new Set());
+  const [llmErrors, setLlmErrors] = useState<Record<string, { error: string; result?: string }>>({});
+  const [savedSemesterSummaries, setSavedSemesterSummaries] = useState<Record<number, string>>({});
   const [saving, setSaving] = useState(false);
   const backupInputRef = useRef<HTMLInputElement>(null);
+  const appliedUpdateCountRef = useRef(0);
   const { tableRef, columnWidths, rowHeights, handleColumnResizeStart, handleRowResizeStart, renderCellResizeHandles } = useResizableTable<number>({ defaultRowHeight: 80 });
   const frozenLayout = recordsFrozenLayout(columnWidths);
   const selectedClass = classes.find(item => item.id === classId);
@@ -63,6 +67,16 @@ export default function ActivityPage() {
   const recordsTree = useRecordsTree(classes);
   const excelMode = settings?.record_mode === 'excel';
   const setHasUnsavedChanges = useRecordsUnsavedStore(state => state.setHasUnsavedChanges);
+  const aiBatchJob = useAiBatchStore(state => state.currentJob);
+  const claudeBatchJobs = useAiBatchStore(state => state.claudeBatchJobs);
+  const aiBatchUpdates = useAiBatchStore(state => state.updates);
+  const loadClaudeBatchJobs = useAiBatchStore(state => state.loadClaudeBatchJobs);
+  const startActivityBatch = useAiBatchStore(state => state.startActivityBatch);
+  const startActivityClaudeBatch = useAiBatchStore(state => state.startActivityClaudeBatch);
+  const checkClaudeBatchResults = useAiBatchStore(state => state.checkClaudeBatchResults);
+  const isAiCellLocked = useAiBatchStore(state => state.isCellLocked);
+  const batchJobs = useMemo(() => claudeBatchJobs.filter(job => job.classId === classId && job.contentType === 'activity'), [claudeBatchJobs, classId]);
+  const batchGenerating = aiBatchJob?.status === 'running' || aiBatchJob?.status === 'stopping';
 
   const subjectKey = (scope: AcademicSubjectScope) => `${scope.year}:${scope.semester}:${scope.grade}:${scope.subject}`;
   const loadLinkedSubjects = async () => {
@@ -85,18 +99,15 @@ export default function ActivityPage() {
     setSelectedDate(current => current === 'all' || rows.some(row => row.activity_date === current) ? current : 'all');
     return rows;
   };
-  const loadBatchJobs = async (targetClassId = classId) => {
-    if (!targetClassId) return;
-    const { data } = await claudeBatchApi.list(targetClassId);
-    setBatchJobs((data.jobs || []).filter((job: ClaudeBatchResultJob) => job.contentType === 'activity'));
-  };
   const loadRoster = async (targetClassId = classId) => {
     if (!targetClassId) return [] as StudentRow[];
-    const { data } = await classesApi.getStudents(targetClassId);
+    const [{ data }, { data: summaries }] = await Promise.all([classesApi.getStudents(targetClassId), activityApi.getSemesterSummaries(targetClassId)]);
+    const summaryMap = Object.fromEntries((summaries as Array<{ student_id: number; summary: string }>).map(item => [item.student_id, item.summary || ''])) as Record<number, string>;
     const rows = (data as Array<{ id: number; student_num: number; name: string }>).map(student => ({
       ...student, summary: '', saved_summary: '', is_absent: 0, observation: '', topic: '',
-      plus_text: '', minus_text: '', interesting_text: '', semester_summary: '', files: [],
+      plus_text: '', minus_text: '', interesting_text: '', semester_summary: summaryMap[student.id] || '', files: [],
     }));
+    setSavedSemesterSummaries(summaryMap);
     setRosterStudents(rows);
     return rows;
   };
@@ -118,7 +129,7 @@ export default function ActivityPage() {
     setBusy(true);
     try {
       const rows = await loadDates();
-      await Promise.all([loadSettings(), loadTables(rows, selectedDate), loadBatchJobs()]);
+      await Promise.all([loadSettings(), loadTables(rows, selectedDate), loadClaudeBatchJobs(classId), loadRoster(classId)]);
     } catch (error: any) { alert(error?.response?.data?.error || '활동 기록을 새로고침하지 못했습니다.'); }
     finally { setBusy(false); }
   };
@@ -131,9 +142,9 @@ export default function ActivityPage() {
     });
   }, []);
   useEffect(() => {
-    setDates([]); setSavedDates([]); setTables({}); setSavedTables({}); setRosterStudents([]); setSelectedDate('all'); setSettings(null); setPlanRows([]); setBatchJobs([]); setShowBatchResults(false);
+    setDates([]); setSavedDates([]); setTables({}); setSavedTables({}); setRosterStudents([]); setSelectedDate('all'); setSettings(null); setPlanRows([]); setShowBatchResults(false); setGeneratedCells(new Set()); setLlmErrors({}); setSavedSemesterSummaries({});
     const item = classes.find(row => row.id === classId);
-    if (classId && item) void Promise.all([loadDates(classId), loadSettings(item), loadBatchJobs(classId), loadRoster(classId)]);
+    if (classId && item) void Promise.all([loadDates(classId), loadSettings(item), loadClaudeBatchJobs(classId), loadRoster(classId)]);
   }, [classId, classes.length]);
   useEffect(() => {
     if (classId && dates.length) void loadTables();
@@ -145,9 +156,15 @@ export default function ActivityPage() {
   }), [selectedClass?.id]);
 
   const editableDates = (value: ActivityDate[]) => value.map(date => ({ id: date.id, activity_date: date.activity_date, lesson_no: date.lesson_no, journal: date.journal }));
-  const editableTables = (value: Record<string, StudentRow[]>) => Object.fromEntries(Object.entries(value).map(([date, rows]) => [date, rows.map(row => ({ id: row.id, summary: row.summary, is_absent: row.is_absent, observation: row.observation, semester_summary: row.semester_summary || '' }))]));
+  const editableTables = (value: Record<string, StudentRow[]>) => Object.fromEntries(Object.entries(value).map(([date, rows]) => [date, rows.map(row => ({ id: row.id, summary: row.summary, is_absent: row.is_absent, observation: row.observation }))]));
+  const currentSemesterSummaries = useMemo(() => {
+    const values: Record<number, string> = Object.fromEntries(rosterStudents.map(row => [row.id, row.semester_summary || '']));
+    Object.values(tables).flat().forEach(row => { values[row.id] = row.semester_summary || values[row.id] || ''; });
+    return values;
+  }, [rosterStudents, tables]);
   const isDirty = useMemo(() => JSON.stringify(editableDates(dates)) !== JSON.stringify(editableDates(savedDates))
-    || JSON.stringify(editableTables(tables)) !== JSON.stringify(editableTables(savedTables)), [dates, savedDates, tables, savedTables]);
+    || JSON.stringify(editableTables(tables)) !== JSON.stringify(editableTables(savedTables))
+    || JSON.stringify(currentSemesterSummaries) !== JSON.stringify(savedSemesterSummaries), [dates, savedDates, tables, savedTables, currentSemesterSummaries, savedSemesterSummaries]);
   const canDiscardChanges = () => !isDirty || confirm('저장되지 않은 활동 기록 변경 사항이 있습니다. 이동하시겠습니까?');
   useEffect(() => {
     setHasUnsavedChanges(isDirty);
@@ -170,6 +187,36 @@ export default function ActivityPage() {
     Object.values(tables).flat().forEach(student => byId.set(student.id, student));
     return [...byId.values()].sort((a, b) => a.student_num - b.student_num);
   }, [rosterStudents, tables]);
+  useEffect(() => {
+    if (aiBatchUpdates.length < appliedUpdateCountRef.current) appliedUpdateCountRef.current = 0;
+    const pending = aiBatchUpdates.slice(appliedUpdateCountRef.current)
+      .filter(update => update.classId === classId && update.contentType === 'activity');
+    if (!pending.length) {
+      appliedUpdateCountRef.current = aiBatchUpdates.length;
+      return;
+    }
+    const generated = new Set<string>();
+    const errors: Record<string, { error: string; result?: string }> = {};
+    for (const update of pending) {
+      const key = `${update.studentId}:${update.domain}`;
+      if (update.error) errors[key] = { error: update.error, result: update.llmResult };
+      if (!update.content) continue;
+      const content = update.content;
+      generated.add(key);
+      if (update.domain === '__ACTIVITY_SEMESTER__') {
+        setRosterStudents(current => current.map(row => row.id === update.studentId ? { ...row, semester_summary: content } : row));
+        setTables(current => Object.fromEntries(Object.entries(current).map(([dateId, rows]) => [dateId, rows.map(row => row.id === update.studentId ? { ...row, semester_summary: content } : row)])));
+      } else {
+        setTables(current => ({
+          ...current,
+          [update.domain]: (current[update.domain] || []).map(row => row.id === update.studentId ? { ...row, summary: content } : row),
+        }));
+      }
+    }
+    if (generated.size) setGeneratedCells(current => new Set([...current, ...generated]));
+    if (Object.keys(errors).length) setLlmErrors(current => ({ ...current, ...errors }));
+    appliedUpdateCountRef.current = aiBatchUpdates.length;
+  }, [aiBatchUpdates, classId]);
   const allStudentsSelected = students.length > 0 && students.every(student => selectedStudentIds.has(student.id));
   const toggleAllStudents = () => setSelectedStudentIds(allStudentsSelected ? new Set() : new Set(students.map(student => student.id)));
   const toggleStudentSelection = (studentId: number) => setSelectedStudentIds(current => {
@@ -178,6 +225,19 @@ export default function ActivityPage() {
     return next;
   });
   const rowFor = (studentId: number, dateId: number) => tables[String(dateId)]?.find(row => row.id === studentId);
+  const updateActivitySummary = (studentId: number, dateId: number, value: string) => {
+    const key = `${studentId}:${dateId}`;
+    setGeneratedCells(current => { const next = new Set(current); next.delete(key); return next; });
+    setLlmErrors(current => { const next = { ...current }; delete next[key]; return next; });
+    setTables(current => ({ ...current, [String(dateId)]: current[String(dateId)].map(row => row.id === studentId ? { ...row, summary: value } : row) }));
+  };
+  const updateSemesterSummary = (studentId: number, value: string) => {
+    const key = `${studentId}:__ACTIVITY_SEMESTER__`;
+    setGeneratedCells(current => { const next = new Set(current); next.delete(key); return next; });
+    setLlmErrors(current => { const next = { ...current }; delete next[key]; return next; });
+    setRosterStudents(current => current.map(row => row.id === studentId ? { ...row, semester_summary: value } : row));
+    setTables(current => Object.fromEntries(Object.entries(current).map(([dateId, rows]) => [dateId, rows.map(row => row.id === studentId ? { ...row, semester_summary: value } : row)])));
+  };
   const planProgress = (lessonNo: number) => planRows.find(row => Number(row.lessonNo) === Number(lessonNo))?.progress || '';
   const insertDate = (index: number) => {
     if (excelMode) return;
@@ -204,7 +264,11 @@ export default function ActivityPage() {
     }));
   };
   const saveAll = async () => {
-    if (!classId || saving || !isDirty) return;
+    if (!classId || saving) return;
+    if (!isDirty) {
+      alert('변경 내용이 없습니다.');
+      return;
+    }
     if (dates.some(date => !/^\d{4}-\d{2}-\d{2}$/.test(date.activity_date) || Number(date.lesson_no) <= 0)) return alert('날짜와 차시를 확인해 주세요.');
     if (new Set(dates.map(date => date.activity_date)).size !== dates.length) return alert('같은 날짜의 수업을 두 번 만들 수 없습니다.');
     setSaving(true);
@@ -232,14 +296,24 @@ export default function ActivityPage() {
         const baseline = new Map((savedTables[String(date.id)] || []).map(row => [row.id, row]));
         for (const row of currentRows) {
           const saved = baseline.get(row.id);
-          if (!saved || row.summary !== saved.summary) await activityApi.saveSummary(classId, { studentId: row.id, date: date.activity_date, summary: row.summary || '' });
+          if (!saved || row.summary !== saved.summary) await activityApi.saveSummary(classId, {
+            studentId: row.id, date: date.activity_date, summary: row.summary || '',
+            generated: generatedCells.has(`${row.id}:${date.id}`),
+          });
           if (!excelMode && (!saved || row.is_absent !== saved.is_absent || row.observation !== saved.observation)) {
             await activityApi.saveObservation(classId, { studentId: row.id, date: date.activity_date, isAbsent: !!row.is_absent, note: row.observation || '' });
           }
         }
       }
+      for (const [studentId, summary] of Object.entries(currentSemesterSummaries)) {
+        if (summary !== (savedSemesterSummaries[Number(studentId)] || '')) {
+          await activityApi.saveSemesterSummary(classId, { studentId: Number(studentId), summary });
+        }
+      }
       const rows = await loadDates();
-      await Promise.all([loadSettings(), loadTables(rows, selectedDate)]);
+      await Promise.all([loadSettings(), loadTables(rows, selectedDate), loadRoster(classId)]);
+      setGeneratedCells(new Set());
+      setLlmErrors({});
     } catch (error: any) { alert(error?.response?.data?.error || '활동 기록을 저장하지 못했습니다.'); }
     finally { setSaving(false); }
   };
@@ -348,30 +422,41 @@ export default function ActivityPage() {
     } catch (error: any) { alert(error?.response?.data?.error || '백업 다운로드에 실패했습니다.'); }
   };
   const startRecord = async (requestMode: 'immediate' | 'batch') => {
-    if (!classId) return;
+    if (!classId || !selectedClass) return;
     if (isDirty) return alert('변경한 활동 기록을 먼저 저장해 주세요.');
-    const runModes: Array<'date' | 'semester'> = [];
-    if (views.has('activity')) runModes.push('date');
-    if (views.has('comprehensive')) runModes.push('semester');
-    const targets = !selectedDateRow || !selectedStudentIds.size ? undefined : [...selectedStudentIds].map(studentId => ({ studentId, activityDateId: selectedDateRow.id }));
-    setBusy(true);
-    try {
-      const request = requestMode === 'immediate' ? activityApi.generate : activityApi.startBatch;
-      const responses = await Promise.all(runModes.map(mode => request(classId, { targets: mode === 'date' ? targets : undefined, mode })));
-      const requestCount = responses.reduce((sum, response) => sum + Number(response.data.requestCount || 0), 0);
-      alert(requestCount ? `${requestCount}건을 ${requestMode === 'immediate' ? '즉시' : '배치'} 요청했습니다.` : '요청할 기록이 없습니다.');
-      if (requestMode === 'immediate') await refresh();
-      else await loadBatchJobs();
-    } catch (error: any) { alert(error?.response?.data?.error || '기록 요청에 실패했습니다.'); }
-    finally { setBusy(false); }
+    const targetStudentIds = selectedStudentIds.size ? [...selectedStudentIds] : students.map(student => student.id);
+    const targetSet = new Set(targetStudentIds);
+    const requests: ActivityGenerationRequest[] = [];
+    if (views.has('activity')) {
+      const targets = selectedDateRow
+        ? targetStudentIds.map(studentId => ({ studentId, activityDateId: selectedDateRow.id }))
+        : Object.entries(tables).flatMap(([dateId, rows]) => rows
+          .filter(row => targetSet.has(row.id) && !row.manually_edited && row.files?.some(file => !file.summarized_at))
+          .map(row => ({ studentId: row.id, activityDateId: Number(dateId) })));
+      if (targets.length) requests.push({ mode: 'date', targets });
+    }
+    if (views.has('comprehensive')) requests.push({ mode: 'semester', targets: targetStudentIds.map(studentId => ({ studentId })) });
+    if (!requests.length || !requests.some(request => request.targets.length)) return alert('요청할 활동 기록이 없습니다.');
+    const hasLockedTarget = requests.some(request => request.targets.some(target =>
+      isAiCellLocked(classId, target.studentId, 'activity', request.mode === 'semester' ? '__ACTIVITY_SEMESTER__' : String(target.activityDateId || ''))
+    ));
+    if (hasLockedTarget) return alert('배치 작업 진행중인 셀이 포함되어 있습니다. 해당 배치 결과를 먼저 확인하세요.');
+    const label = requests.map(request => request.mode === 'semester' ? '활동 종합' : '활동 기록').join('/');
+    if (!confirm(`${targetStudentIds.length}명 대상 ${label} ${requestMode === 'batch' ? 'Claude 배치 요청' : '생성'}을 실행하시겠습니까?`)) return;
+    const args = {
+      classId,
+      classLabel: `${selectedClass.year}학년도 ${selectedClass.semester}학기 ${selectedClass.grade}학년 ${selectedClass.subject} ${selectedClass.room}`,
+      requests,
+    };
+    const submitted = requestMode === 'batch' ? await startActivityClaudeBatch(args) : await startActivityBatch(args);
+    if (!submitted && requestMode === 'batch') alert('배치 요청에 실패했습니다. 잠시 후 다시 시도해 주세요.');
   };
   const receiveBatchResult = async (job: ClaudeBatchResultJob) => {
     setReceivingBatchId(job.id);
     try {
-      const response = await claudeBatchApi.receive(job.providerBatchIds || [job.id]);
-      alert(response.data.inProgress ? '아직 처리 중인 배치가 있습니다.' : '활동 기록 배치 결과를 반영했습니다.');
-      await Promise.all([refresh(), loadBatchJobs()]);
-    } catch (error: any) { alert(error?.response?.data?.error || '배치 결과를 가져오지 못했습니다.'); }
+      const done = await checkClaudeBatchResults(job.id);
+      if (!done) alert('Claude 배치가 아직 서버에서 진행 중입니다.');
+    } catch { alert('배치 결과 확인에 실패했습니다. 잠시 후 다시 시도해 주세요.'); }
     finally { setReceivingBatchId(''); }
   };
   const toggleView = (value: ActivityView) => setViews(current => {
@@ -384,6 +469,9 @@ export default function ActivityPage() {
   const discardChanges = () => {
     setDates(savedDates);
     setTables(structuredClone(savedTables));
+    setRosterStudents(current => current.map(row => ({ ...row, semester_summary: savedSemesterSummaries[row.id] || '' })));
+    setGeneratedCells(new Set());
+    setLlmErrors({});
   };
   const selectClass = (nextClassId: number) => {
     if (nextClassId === classId) return;
@@ -415,7 +503,7 @@ export default function ActivityPage() {
 
   const sidebar = {
     title: '활동 기록 관리', collapsed: recordsTree.collapsed,
-    titleAction: <button type="button" className={`inline-flex h-8 w-8 items-center justify-center rounded border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 ${recordsTree.collapsed ? 'mx-auto' : 'ml-auto'}`} onClick={recordsTree.toggleCollapsed}>{recordsTree.collapsed ? <PanelLeftOpen size={15}/> : <PanelLeftClose size={15}/>}</button>,
+    titleAction: <button type="button" className={`inline-flex h-8 w-8 items-center justify-center rounded border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 ${recordsTree.collapsed ? 'mx-auto' : 'ml-auto'}`} onClick={recordsTree.toggleCollapsed} title={recordsTree.collapsed ? '목록 펼치기' : '목록 접기'} aria-label={recordsTree.collapsed ? '목록 펼치기' : '목록 접기'}>{recordsTree.collapsed ? <PanelLeftOpen size={15}/> : <PanelLeftClose size={15}/>}</button>,
     tree: recordsTree.collapsed ? <RecordsCollapsedTree classes={classes} selectedClassId={classId} getNodeOpen={recordsTree.getNodeOpen} onToggleOpen={recordsTree.toggleNodeOpen} onSelectClass={item => selectClass(item.id)}/> : {
       nodes: recordsTree.tree,
       empty: <p className="py-8 text-center text-xs text-gray-400">채점 기록 관리에 등록된 수업이 없습니다.</p>,
@@ -445,9 +533,9 @@ export default function ActivityPage() {
   const headerActions: PageHeaderAction[] = [
     { key: 'refresh', icon: <RefreshCw size={14}/>, onClick: () => void refresh(), disabled: busy, title: '새로고침', ariaLabel: '새로고침' },
     ...((views.has('activity') || views.has('reflection')) ? [{ key: 'artifacts', type: 'custom' as const, render: () => <HeaderImportMenu loading={busy} disabled={busy} onZip={file => importZip(file)} onFolder={folderPath => importFolder(folderPath)}/> }] : []),
-    ...(generationLabel ? [{ key: 'record', type: 'custom' as const, render: () => <ExecutionModeMenu label={generationLabel} onImmediate={() => void startRecord('immediate')} onBatch={() => void startRecord('batch')} disabled={busy} immediateTitle={`즉시 ${generationLabel}`} batchTitle={`배치 ${generationLabel}`}/> }] : []),
+    ...(generationLabel ? [{ key: 'record', type: 'custom' as const, render: () => <ExecutionModeMenu label={generationLabel} onImmediate={() => void startRecord('immediate')} onBatch={() => void startRecord('batch')} disabled={busy || batchGenerating} immediateTitle={`즉시 ${generationLabel}`} batchTitle={`배치 ${generationLabel}`}/> }] : []),
     ...(batchJobs.length ? [{ key: 'batch-results', label: `결과 (${batchJobs.length})`, onClick: () => setShowBatchResults(true), disabled: busy }] : []),
-    { key: 'save', label: saving ? '저장 중...' : '저장', icon: <Save size={14}/>, variant: 'primary', onClick: () => void saveAll(), disabled: saving || busy || !isDirty },
+    { key: 'save', label: saving ? '저장 중...' : '저장', icon: <Save size={14}/>, variant: 'primary', onClick: () => void saveAll(), disabled: saving || busy, title: '저장', ariaLabel: '저장' },
     { key: 'delete-content', icon: <Trash2 size={14}/>, variant: 'danger', title: '선택한 행의 내용 삭제', ariaLabel: '선택한 행의 내용 삭제', onClick: () => void deleteSelectedContent(), disabled: busy || !selectedStudentIds.size },
     { key: 'download', icon: <Download size={14}/>, variant: 'success', title: '활동 기록 다운로드', ariaLabel: '활동 기록 다운로드', onClick: () => void downloadJournal(), disabled: !selectedClass },
     { key: 'backup-upload', type: 'file', icon: <Upload size={14}/>, inputRef: backupInputRef, accept: '.xlsx', onChange: uploadBackup, disabled: busy || !selectedClass, title: '복원', ariaLabel: '활동 기록 복원' },
@@ -480,21 +568,45 @@ export default function ActivityPage() {
   const dateCells = (student: StudentRow, date: ActivityDate) => {
     const row = rowFor(student.id, date.id);
     if (!row) return <td key={`${date.id}-empty`} className="border p-2 text-gray-300" colSpan={dateColumnCount}>-</td>;
+    const rowTextareaHeight = rowHeights[String(student.id)];
     const pendingFiles = row.files?.some(file => !file.summarized_at);
+    const activityCellKey = `${student.id}:${date.id}`;
+    const activityCellLocked = isAiCellLocked(classId, student.id, 'activity', String(date.id));
+    const activityError = llmErrors[activityCellKey];
     return <>{dataColumns.filter(column => column.date.id === date.id).map(column => {
       const width = columnWidths[column.key] ?? column.width;
       let content: React.ReactNode = '-';
       const tableKey = String(date.id);
       const savedRow = savedTables[tableKey]?.find(item => item.id === row.id);
       if (column.kind === 'files') content = <CompactArtifactCell files={row.files || []} pending={pendingFiles} uploading={uploadingCell === `${student.id}:${date.id}`} onPreview={file => setPreviewArtifact({ id: file.id, filename: file.filename, source: 'activity' })} onUpload={files => uploadStudentFiles(student, date, files)}/>;
-      if (column.kind === 'activity') content = <StableTextarea className={`textarea h-full min-h-20 w-full ${row.summary !== savedRow?.summary ? 'border-amber-300 bg-amber-50' : ''}`} value={row.summary || ''} onChange={event => setTables(current => ({ ...current, [tableKey]: current[tableKey].map(item => item.id === row.id ? { ...item, summary: event.target.value } : item) }))}/>;
+      if (column.kind === 'activity') content = <div className="group/llm-error relative"><StableTextarea className={`textarea w-full disabled:cursor-not-allowed disabled:bg-gray-100 disabled:text-gray-500 ${activityError ? 'border-rose-300 bg-rose-50' : row.summary !== savedRow?.summary ? 'border-amber-300 bg-amber-50' : ''}`} style={{ minHeight: 80, height: rowTextareaHeight }} disabled={activityCellLocked} title={activityCellLocked ? 'AI 생성 진행 중이라 수정할 수 없습니다.' : undefined} value={row.summary || ''} onChange={event => updateActivitySummary(row.id, date.id, event.target.value)}/>{activityError && <div className="pointer-events-none absolute left-1/2 top-full z-50 mt-2 hidden w-80 -translate-x-1/2 rounded-md border border-rose-200 bg-rose-50 p-3 text-left text-xs text-rose-950 shadow-lg group-hover/llm-error:block group-focus-within/llm-error:block"><div className="mb-1 font-semibold text-rose-700">LLM 오류</div><div className="whitespace-pre-wrap">{activityError.error}</div>{activityError.result && <div className="mt-2 whitespace-pre-wrap border-t border-rose-200 pt-2 text-rose-800">{activityError.result}</div>}</div>}</div>;
       if (column.kind === 'absent') content = <input type="checkbox" checked={!!row.is_absent} disabled={excelMode} onChange={event => setTables(current => ({ ...current, [tableKey]: current[tableKey].map(item => item.id === row.id ? { ...item, is_absent: event.target.checked ? 1 : 0 } : item) }))}/>;
-      if (column.kind === 'observation') content = excelMode ? <span className="whitespace-pre-wrap">{row.observation || '-'}</span> : <StableTextarea className={`textarea h-full min-h-20 w-full disabled:bg-gray-100 disabled:text-gray-400 ${row.observation !== savedRow?.observation ? 'border-amber-300 bg-amber-50' : ''}`} disabled={!!row.is_absent} value={row.observation || ''} onChange={event => setTables(current => ({ ...current, [tableKey]: current[tableKey].map(item => item.id === row.id ? { ...item, observation: event.target.value } : item) }))}/>;
+      if (column.kind === 'observation') content = excelMode ? <span className="whitespace-pre-wrap">{row.observation || '-'}</span> : <StableTextarea className={`textarea w-full disabled:bg-gray-100 disabled:text-gray-400 ${row.observation !== savedRow?.observation ? 'border-amber-300 bg-amber-50' : ''}`} style={{ minHeight: 80, height: rowTextareaHeight }} disabled={!!row.is_absent} value={row.observation || ''} onChange={event => setTables(current => ({ ...current, [tableKey]: current[tableKey].map(item => item.id === row.id ? { ...item, observation: event.target.value } : item) }))}/>;
       if (column.kind === 'reflection') content = row.plus_text || row.minus_text || row.interesting_text
         ? <div className="whitespace-pre-wrap text-xs leading-5"><div><span className="font-medium text-gray-600">Plus:</span> {row.plus_text}</div><div><span className="font-medium text-gray-600">Minus:</span> {row.minus_text}</div><div><span className="font-medium text-gray-600">Interesting:</span> {row.interesting_text}</div></div>
         : <span className="text-gray-300">-</span>;
       return <td key={column.key} className={`relative border-r px-2 py-2 align-top ${column.kind === 'absent' ? 'text-center' : ''} ${column.kind === 'files' && pendingFiles ? 'border-amber-300 bg-amber-50' : ''}`} style={{ width, minWidth: width }}>{content}{renderCellResizeHandles(student.id, column.key, column.width)}</td>;
     })}</>;
+  };
+  const comprehensiveCell = (student: StudentRow) => {
+    const key = `${student.id}:__ACTIVITY_SEMESTER__`;
+    const locked = isAiCellLocked(classId, student.id, 'activity', '__ACTIVITY_SEMESTER__');
+    const error = llmErrors[key];
+    const height = rowHeights[String(student.id)];
+    return <td className="relative border-r p-1 align-top" style={{ width: comprehensiveWidth, minWidth: comprehensiveWidth }}>
+      <div className="group/llm-error relative">
+        <StableTextarea
+          className={`textarea w-full text-sm disabled:cursor-not-allowed disabled:bg-gray-100 disabled:text-gray-500 ${error ? 'border-rose-300 bg-rose-50' : currentSemesterSummaries[student.id] !== (savedSemesterSummaries[student.id] || '') ? 'border-amber-300 bg-amber-50' : ''}`}
+          style={{ minHeight: 80, height }}
+          value={student.semester_summary || ''}
+          onChange={event => updateSemesterSummary(student.id, event.target.value)}
+          disabled={locked}
+          title={locked ? 'AI 생성 진행 중이라 수정할 수 없습니다.' : undefined}
+        />
+        {error && <div className="pointer-events-none absolute left-1/2 top-full z-50 mt-2 hidden w-80 -translate-x-1/2 rounded-md border border-rose-200 bg-rose-50 p-3 text-left text-xs text-rose-950 shadow-lg group-hover/llm-error:block group-focus-within/llm-error:block"><div className="mb-1 font-semibold text-rose-700">LLM 오류</div><div className="whitespace-pre-wrap">{error.error}</div>{error.result && <div className="mt-2 whitespace-pre-wrap border-t border-rose-200 pt-2 text-rose-800">{error.result}</div>}</div>}
+      </div>
+      {renderCellResizeHandles(student.id, '_comprehensive', 320)}
+    </td>;
   };
   const dateHeader = (date: ActivityDate) => {
     const headerRowKey = -1_000_000_000 - Math.abs(date.id);
@@ -523,7 +635,7 @@ export default function ActivityPage() {
       {!selectedClass ? <div className="flex h-full items-center justify-center text-gray-400">왼쪽에서 강의실을 선택하세요.</div> : hasDateViews && !dates.length ? <div className="flex h-full flex-col items-center justify-center gap-3 text-gray-400"><span>표시할 수업이 없습니다.</span>{!excelMode && <button type="button" className="btn-secondary" onClick={() => insertDate(0)}><Plus size={14}/> 수업 추가</button>}</div> : <div className="w-max pr-32"><table ref={tableRef} className="records-table border-collapse text-left text-sm" style={{ tableLayout: 'fixed', width: tableTotalWidth, minWidth: tableTotalWidth }}>
         <colgroup>{tableColumnWidths.map((width, index) => <col key={index} style={{ width, minWidth: width }}/>)}</colgroup>
         <thead className="sticky top-0 z-20 bg-gray-50 shadow-sm"><tr><RecordsFrozenHeader layout={frozenLayout} rowSpan={hasDateViews ? 2 : 1} allSelected={allStudentsSelected} onToggleAll={toggleAllStudents} onResize={handleColumnResizeStart}/>{hasDateViews && visibleDates.map(dateHeader)}{views.has('comprehensive') && <th rowSpan={hasDateViews ? 2 : 1} className="relative border-b border-r bg-amber-50/60 px-4 py-3 text-center font-semibold text-gray-800 select-none" style={{ width: comprehensiveWidth, minWidth: comprehensiveWidth }}>활동 종합 기록<div className="records-table-column-resize-handle absolute bottom-0 right-0 top-0 z-10 cursor-col-resize bg-transparent" onMouseDown={event => handleColumnResizeStart(event, '_comprehensive', 320)}/></th>}</tr>{hasDateViews && <tr>{visibleDates.map((date, index) => <Fragment key={date.id}>{dateSubHeaders(date, index)}</Fragment>)}</tr>}</thead>
-        <tbody className="divide-y divide-gray-100">{students.map(student => { const { classNum, seatNum } = classAndSeat(student.student_num); const rowHeight = rowHeights[String(student.id)] ? rowHeights[String(student.id)] + 10 : undefined; return <tr key={student.id} className="records-table-row" style={{ height: rowHeight }}><RecordsFrozenStudentCells layout={frozenLayout} rowKey={student.id} classNum={classNum} studentNum={seatNum} name={student.name} selected={selectedStudentIds.has(student.id)} onToggle={() => toggleStudentSelection(student.id)} renderResizeHandles={renderCellResizeHandles}/>{hasDateViews && visibleDates.map(date => <Fragment key={date.id}>{dateCells(student, date)}</Fragment>)}{views.has('comprehensive') && <td className="relative border-r px-3 py-2 align-top whitespace-pre-wrap" style={{ width: comprehensiveWidth, minWidth: comprehensiveWidth }}>{student.semester_summary || '-'}{renderCellResizeHandles(student.id, '_comprehensive', 320)}</td>}</tr>; })}
+        <tbody className="divide-y divide-gray-100">{students.map(student => { const { classNum, seatNum } = classAndSeat(student.student_num); const rowHeight = rowHeights[String(student.id)] ? rowHeights[String(student.id)] + 10 : undefined; return <tr key={student.id} className="records-table-row" style={{ height: rowHeight }}><RecordsFrozenStudentCells layout={frozenLayout} rowKey={student.id} classNum={classNum} studentNum={seatNum} name={student.name} selected={selectedStudentIds.has(student.id)} onToggle={() => toggleStudentSelection(student.id)} renderResizeHandles={renderCellResizeHandles}/>{hasDateViews && visibleDates.map(date => <Fragment key={date.id}>{dateCells(student, date)}</Fragment>)}{views.has('comprehensive') && comprehensiveCell(student)}</tr>; })}
           {hasDateViews && visibleDates.length > 0 && <tr className="h-10 bg-gray-50/60"><td colSpan={4} className="border-r"/>{visibleDates.map(date => <td key={`delete-${date.id}`} colSpan={dateColumnCount} className="border-r text-center">{!excelMode && date.source_mode === 'app' && <button type="button" className="rounded p-1.5 text-red-500 hover:bg-red-50" title={`${date.activity_date} 수업 삭제`} aria-label={`${date.activity_date} 수업 삭제`} onClick={() => void deleteDate(date)}><Trash2 size={14}/></button>}</td>)}{views.has('comprehensive') && <td className="border-r"/>}</tr>}
         </tbody>
       </table></div>}

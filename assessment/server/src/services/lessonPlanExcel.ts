@@ -203,6 +203,8 @@ export class WorkbookGateway {
       });
     });
     const templateColumn = classroom.dates.length + 5;
+    const currentYear = new Date().getFullYear();
+    sheet.getCell(1, templateColumn).value = new Date(Date.UTC(currentYear, 0, 1));
     const previousLesson = classroom.dates.at(-1)?.lessonNo || 0;
     const nextLesson = previousLesson + 1;
     WorkbookGateway.setAttendanceFormula(sheet, templateColumn, classroom.students.length, classroom.students.length);
@@ -234,13 +236,15 @@ export class WorkbookGateway {
 
   private static formatPlanSheet(sheet: ExcelJS.Worksheet) {
     sheet.properties.defaultRowHeight = 18;
-    sheet.views = [{ state: 'normal', showGridLines: true, zoomScale: 100, zoomScaleNormal: 100 }];
+    sheet.views = [{ state: 'frozen', ySplit: 1, topLeftCell: 'A2', activeCell: 'A2', showGridLines: true, zoomScale: 100, zoomScaleNormal: 100 }];
     [10.7109375, 30.7109375, 30.7109375, 30.7109375, 10.7109375, 10.7109375, 10.7109375]
       .forEach((width, index) => { sheet.getColumn(index + 1).width = width; });
     sheet.eachRow(row => {
       row.height = 18;
       row.eachCell(cell => { cell.alignment = { vertical: 'middle', wrapText: true }; });
     });
+    const headerFill: ExcelJS.Fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFD9D9D9' }, bgColor: { argb: 'FFFFFFFF' } };
+    sheet.getRow(1).eachCell(cell => { cell.fill = headerFill; });
   }
 
   private static formatClassroomSheet(sheet: ExcelJS.Worksheet, lastColumn: number, studentCount: number) {

@@ -97,7 +97,12 @@ async function main() {
     assert.equal(exportedRoom.getCell('D6').font.name, '맑은 고딕');
     assert.equal(exportedRoom.getCell('E6').value, '관찰 내용');
     assert.equal(exportedRoom.getCell('F6').value, '/');
-    assert.equal(exportedRoom.getCell('G1').value, null);
+    const templateDate = exportedRoom.getCell('G1').value;
+    assert.equal(templateDate instanceof Date, true);
+    assert.equal((templateDate as Date).getUTCFullYear(), new Date().getFullYear());
+    assert.equal((templateDate as Date).getUTCMonth(), 0);
+    assert.equal((templateDate as Date).getUTCDate(), 1);
+    assert.equal(exportedRoom.getCell('G1').numFmt, 'm"월" d"일"');
     assert.equal((exportedRoom.getCell('G3').value as ExcelJS.CellFormulaValue).formula, 'F3+1');
     assert.equal((exportedRoom.getCell('G3').value as ExcelJS.CellFormulaValue).result, 2);
     assert.equal((exportedRoom.getCell('G4').value as ExcelJS.CellFormulaValue).result, '실습');
@@ -108,6 +113,11 @@ async function main() {
     const planOnlyWorkbook = new ExcelJS.Workbook();
     await planOnlyWorkbook.xlsx.readFile(planOnlyPath);
     assert.deepEqual(planOnlyWorkbook.worksheets.map(sheet => sheet.name), ['진도']);
+    const exportedPlan = planOnlyWorkbook.getWorksheet('진도')!;
+    assert.equal(exportedPlan.views[0].state, 'frozen');
+    assert.equal((exportedPlan.views[0] as any).ySplit, 1);
+    assert.equal((exportedPlan.getCell('A1').fill as ExcelJS.FillPattern).fgColor?.argb, 'FFD9D9D9');
+    assert.deepEqual(exportedPlan.getCell('A1').fill, exportedRoom.getCell('A1').fill);
 
     const folder = path.join(root, 'source');
     fs.mkdirSync(path.join(folder, '8월 11일'), { recursive: true });

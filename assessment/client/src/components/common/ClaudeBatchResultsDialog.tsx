@@ -6,6 +6,7 @@ export interface ClaudeBatchResultJob {
   total: number;
   startedAt: number;
   providerBatchIds?: string[];
+  lockedCells?: Array<{ contentType: string; domain: string; studentIds: number[] }>;
   status?: string;
   message?: string;
 }

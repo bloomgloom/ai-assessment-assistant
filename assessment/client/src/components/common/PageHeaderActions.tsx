@@ -1,6 +1,7 @@
 import { ChangeEvent, ReactNode, RefObject } from 'react';
 import { Loader2 } from 'lucide-react';
 import { acceptToFilters, filesToInputChangeEvent, hasDesktopFileDialogs, openFiles } from '../../lib/desktopFiles';
+import { Tooltip } from './Tooltip';
 
 type PageHeaderActionVariant = 'primary' | 'secondary' | 'success' | 'danger' | 'rainbow';
 
@@ -89,60 +90,60 @@ export function PageHeaderActions({ actions }: { actions: PageHeaderAction[] }) 
         if (action.type === 'file') {
           if (useDesktopDialogs) {
             return (
-              <button
-                key={action.key}
-                type="button"
-                className={actionClassName(action)}
-                onClick={async () => {
-                  const files = await openFiles({
-                    multiple: action.multiple,
-                    filters: acceptToFilters(action.accept),
-                  });
-                  if (!files?.length) return;
-                  action.onChange(filesToInputChangeEvent(files) as unknown as ChangeEvent<HTMLInputElement>);
-                }}
-                disabled={action.disabled || action.loading}
-                title={action.title}
-                aria-label={action.ariaLabel}
-              >
-                {actionContent(action)}
-              </button>
+              <Tooltip key={action.key} content={action.title} align="end">
+                <button
+                  type="button"
+                  className={actionClassName(action)}
+                  onClick={async () => {
+                    const files = await openFiles({
+                      multiple: action.multiple,
+                      filters: acceptToFilters(action.accept),
+                    });
+                    if (!files?.length) return;
+                    action.onChange(filesToInputChangeEvent(files) as unknown as ChangeEvent<HTMLInputElement>);
+                  }}
+                  disabled={action.disabled || action.loading}
+                  aria-label={action.ariaLabel || action.title}
+                >
+                  {actionContent(action)}
+                </button>
+              </Tooltip>
             );
           }
 
           return (
-            <label
-              key={action.key}
-              className={`${actionClassName(action)} cursor-pointer ${action.disabled || action.loading ? 'opacity-60' : ''}`}
-              title={action.title}
-              aria-label={action.ariaLabel}
-            >
-              {actionContent(action)}
-              <input
-                ref={action.inputRef}
-                type="file"
-                accept={action.accept}
-                multiple={action.multiple}
-                className="hidden"
-                onChange={action.onChange}
-                disabled={action.disabled || action.loading}
-              />
-            </label>
+            <Tooltip key={action.key} content={action.title} align="end">
+              <label
+                className={`${actionClassName(action)} cursor-pointer ${action.disabled || action.loading ? 'opacity-60' : ''}`}
+                aria-label={action.ariaLabel || action.title}
+              >
+                {actionContent(action)}
+                <input
+                  ref={action.inputRef}
+                  type="file"
+                  accept={action.accept}
+                  multiple={action.multiple}
+                  className="hidden"
+                  onChange={action.onChange}
+                  disabled={action.disabled || action.loading}
+                />
+              </label>
+            </Tooltip>
           );
         }
 
         return (
-          <button
-            key={action.key}
-            type="button"
-            className={actionClassName(action)}
-            onClick={action.onClick}
-            disabled={action.disabled || action.loading}
-            title={action.title}
-            aria-label={action.ariaLabel}
-          >
-            {actionContent(action)}
-          </button>
+          <Tooltip key={action.key} content={action.title} align="end">
+            <button
+              type="button"
+              className={actionClassName(action)}
+              onClick={action.onClick}
+              disabled={action.disabled || action.loading}
+              aria-label={action.ariaLabel || action.title}
+            >
+              {actionContent(action)}
+            </button>
+          </Tooltip>
         );
       })}
     </div>

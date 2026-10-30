@@ -352,7 +352,7 @@ export const activityApi = {
   updateDate: (classId: number, id: number, data: Record<string, unknown>) => api.patch(`/activity/${classId}/dates/${id}`, data),
   deleteDate: (classId: number, id: number) => api.delete(`/activity/${classId}/dates/${id}`),
   getTable: (classId: number, date: string) => api.get(`/activity/${classId}/table`, { params: { date, t: Date.now() } }),
-  saveSummary: (classId: number, data: { studentId: number; date: string; summary: string }) => api.put(`/activity/${classId}/summaries`, data),
+  saveSummary: (classId: number, data: { studentId: number; date: string; summary: string; generated?: boolean }) => api.put(`/activity/${classId}/summaries`, data),
   saveObservation: (classId: number, data: { studentId: number; date: string; isAbsent: boolean; note: string }) => api.put(`/activity/${classId}/observations`, data),
   deleteContent: (classId: number, data: { studentIds: number[]; dates: string[]; views: string[] }) => api.delete(`/activity/${classId}/content`, { data }),
   uploadFiles: (classId: number, studentId: number, date: string, files: File[]) => {
@@ -371,10 +371,10 @@ export const activityApi = {
     return api.post(`/activity/${classId}/import`, form);
   },
   getPending: (classId: number) => api.get(`/activity/${classId}/pending`, { params: { t: Date.now() } }),
-  generate: (classId: number, data: { targets?: Array<{ studentId: number; activityDateId: number }>; mode?: 'date' | 'semester' }) =>
-    api.post(`/activity/${classId}/generate`, data),
-  startBatch: (classId: number, data: { targets?: Array<{ studentId: number; activityDateId: number }>; mode?: 'date' | 'semester' }) =>
+  startBatch: (classId: number, data: { targets: Array<{ studentId: number; activityDateId?: number }>; mode: 'date' | 'semester' }) =>
     api.post(`/activity/${classId}/batch`, data, { timeout: CLAUDE_BATCH_SUBMIT_TIMEOUT_MS }),
+  saveSemesterSummary: (classId: number, data: { studentId: number; summary: string }) =>
+    api.put(`/activity/${classId}/semester-summaries`, data),
   listBatchJobs: claudeBatchApi.list,
   checkBatchResults: claudeBatchApi.receive,
   getSemesterSummaries: (classId: number) => api.get(`/activity/${classId}/semester-summaries`, { params: { t: Date.now() } }),

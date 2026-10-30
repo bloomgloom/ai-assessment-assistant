@@ -583,7 +583,8 @@ export function useRecordsPage() {
       appliedUpdateCountRef.current = 0;
     }
     if (!selectedClass) return;
-    const pendingUpdates = aiBatchUpdates.slice(appliedUpdateCountRef.current);
+    const pendingUpdates = aiBatchUpdates.slice(appliedUpdateCountRef.current)
+      .filter(update => update.contentType !== 'activity' && (!update.classId || update.classId === selectedClass.id));
     if (!pendingUpdates.length) return;
 
     const spellcheckUpdates = pendingUpdates.filter(update => update.contentType === 'spellcheck');

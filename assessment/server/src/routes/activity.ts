@@ -13,6 +13,7 @@ import { decodeUploadFilename } from '../services/filename';
 import { parseActivityReflectionCsv } from '../services/activityReflectionCsv';
 import { activityDateFromPath, importDateFolders, isReflectionImportPath } from '../services/activityImportPaths';
 import { activityFilenameDecision, nextActivityLessonNo } from '../services/activityRules';
+import { parseFirstJson } from '../services/json';
 
 const router = Router();
 const TEMP_DIR = path.join(UPLOADS_DIR, 'temp');
@@ -238,11 +239,27 @@ router.patch('/summaries/:id', async (req, res) => {
 router.put('/:classId/summaries', async (req, res) => {
   const dateRow = await queryOne<{ id: number }>('SELECT id FROM activity_dates WHERE class_id=? AND activity_date=?', [req.params.classId, String(req.body.date || '')]);
   if (!dateRow) return res.status(404).json({ error: '날짜 칸을 찾을 수 없습니다.' });
+  const generated = !!req.body.generated;
   await execute(
     `INSERT INTO activity_summaries(student_id,activity_date_id,summary,manually_edited,updated_at)
-     VALUES(?,?,?,1,datetime('now')) ON CONFLICT(student_id,activity_date_id) DO UPDATE SET
-       summary=excluded.summary,manually_edited=1,updated_at=datetime('now')`,
-    [Number(req.body.studentId), dateRow.id, String(req.body.summary || '')]
+     VALUES(?,?,?,?,datetime('now')) ON CONFLICT(student_id,activity_date_id) DO UPDATE SET
+       summary=excluded.summary,manually_edited=excluded.manually_edited,updated_at=datetime('now')`,
+    [Number(req.body.studentId), dateRow.id, String(req.body.summary || ''), generated ? 0 : 1]
+  );
+  if (generated) await execute(
+    'UPDATE activity_files SET summarized_at=datetime(\'now\') WHERE student_id=? AND activity_date_id=?',
+    [Number(req.body.studentId), dateRow.id]
+  );
+  res.json({ ok: true });
+});
+
+router.put('/:classId/semester-summaries', async (req, res) => {
+  const student = await queryOne<{ id: number }>('SELECT id FROM class_students WHERE id=? AND class_id=?', [Number(req.body.studentId), req.params.classId]);
+  if (!student) return res.status(404).json({ error: '학생을 찾을 수 없습니다.' });
+  await execute(
+    `INSERT INTO activity_semester_summaries(student_id,summary,updated_at) VALUES(?,?,datetime('now'))
+     ON CONFLICT(student_id) DO UPDATE SET summary=excluded.summary,updated_at=datetime('now')`,
+    [student.id, String(req.body.summary || '')]
   );
   res.json({ ok: true });
 });
@@ -456,16 +473,12 @@ function sanitizeStudentText(text: string, student: { student_num: number; name:
 }
 
 function summaryFromResponse(text: string): string {
-  const cleaned = text.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
-  try {
-    const parsed = JSON.parse(cleaned);
-    return String(parsed?.summary || '').trim();
-  } catch {
-    return cleaned;
-  }
+  const parsed = parseFirstJson<{ summary?: unknown }>(text, 'object');
+  return String(parsed.summary || '').trim();
 }
 
 router.post('/:classId/generate', async (req, res) => {
+  let streamStarted = false;
   try {
     const cls = await classById(req.params.classId);
     if (!cls) return res.status(404).json({ error: '수업을 찾을 수 없습니다.' });
@@ -473,81 +486,91 @@ router.post('/:classId/generate', async (req, res) => {
     const mode = req.body.mode === 'semester' ? 'semester' : 'date';
     const requestedTargets = Array.isArray(req.body.targets) ? req.body.targets : [];
     const targets = mode === 'semester'
-      ? await queryAll<any>('SELECT id AS student_id FROM class_students WHERE class_id=? ORDER BY student_num', [cls.id])
+      ? requestedTargets.map((item: any) => ({ student_id: Number(item.studentId) }))
       : requestedTargets.length
         ? requestedTargets.map((item: any) => ({ student_id: Number(item.studentId), activity_date_id: Number(item.activityDateId) }))
-        : await queryAll<any>(
-            `SELECT DISTINCT f.student_id,f.activity_date_id FROM activity_files f
-             JOIN class_students cs ON cs.id=f.student_id
-             JOIN activity_dates d ON d.id=f.activity_date_id
-             LEFT JOIN activity_summaries s ON s.student_id=f.student_id AND s.activity_date_id=f.activity_date_id
-             WHERE cs.class_id=? AND d.source_mode!='excel_deleted' AND COALESCE(f.summarized_at,'')='' AND COALESCE(s.manually_edited,0)=0`,
-            [cls.id]
-          );
+        : [];
+    if (!targets.length) return res.status(400).json({ error: '생성할 활동 기록 셀이 없습니다.' });
     const subjectSettings = await planSettings(cls) || {};
+    res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-cache, no-transform');
+    res.setHeader('Connection', 'keep-alive');
+    res.flushHeaders();
+    streamStarted = true;
+    const sendEvent = (event: Record<string, unknown>) => res.write(`data: ${JSON.stringify(event)}\n\n`);
+    const controller = new AbortController();
+    req.on('aborted', () => controller.abort());
+    res.on('close', () => { if (!res.writableEnded) controller.abort(); });
     let completed = 0;
     for (const target of targets) {
+      if (controller.signal.aborted) break;
       const student = await queryOne<any>('SELECT id,student_num,name,personal_num FROM class_students WHERE id=? AND class_id=?', [target.student_id, cls.id]);
       if (!student) continue;
-      let parts: string[] = [];
-      let attachments: any[] = [];
-      let activityDateId = 0;
-      let fileIds: number[] = [];
-      if (mode === 'semester') {
-        const records = await queryAll<any>(
-          `SELECT d.activity_date,d.lesson_no,d.progress,COALESCE(s.summary,'') AS summary,
-             COALESCE(o.is_absent,0) AS is_absent,COALESCE(o.note,'') AS observation,
-             COALESCE(r.plus_text,'') AS plus_text,COALESCE(r.minus_text,'') AS minus_text,COALESCE(r.interesting_text,'') AS interesting_text
-           FROM activity_dates d
-           LEFT JOIN activity_summaries s ON s.activity_date_id=d.id AND s.student_id=?
-           LEFT JOIN activity_observations o ON o.activity_date_id=d.id AND o.student_id=?
-           LEFT JOIN activity_reflections r ON r.activity_date=d.activity_date AND r.student_id=?
-           WHERE d.class_id=? AND d.source_mode!='excel_deleted' ORDER BY d.activity_date`,
-          [student.id, student.id, student.id, cls.id]
-        );
-        if (!records.some(row => row.summary || row.observation || row.is_absent || row.plus_text || row.minus_text || row.interesting_text)) continue;
-        parts = [`[지시]\n${subjectSettings.comprehensive_prompt || '학생의 학기 전체 활동을 구체적 사실 중심으로 간결하게 종합한다. 학생 이름과 평가·점수는 쓰지 않는다.'}`,
-          `[학기 활동 기록]\n${records.map(row => `${row.activity_date} ${row.lesson_no}차시 ${row.progress}\n활동: ${row.summary}\n관찰: ${row.is_absent ? '결석' : row.observation}\n성찰: Plus ${row.plus_text} / Minus ${row.minus_text} / Interesting ${row.interesting_text}`).join('\n\n')}`,
-          '위 기록을 바탕으로 학기 활동 종합을 작성한다.'];
-      } else {
-        activityDateId = Number(target.activity_date_id);
-        const date = await queryOne<any>("SELECT * FROM activity_dates WHERE id=? AND class_id=? AND source_mode!='excel_deleted'", [activityDateId, cls.id]);
-        if (!date) continue;
-        let plan: any = await queryOne<any>('SELECT * FROM lesson_plans WHERE year=? AND semester=? AND grade=? AND subject=? AND lesson_no=? ORDER BY sort_order LIMIT 1', [cls.year, cls.semester, cls.grade, cls.subject, date.lesson_no]);
-        const excelPath = resolveStoredPath(subjectSettings.source_filepath || subjectSettings.excel_path || '');
-        if (!plan && subjectSettings.record_mode === 'excel' && excelPath) {
-          const excelPlan = (await WorkbookGateway.open(excelPath)).readPlans().find(item => item.lessonNo === Number(date.lesson_no));
-          if (excelPlan) plan = { kind: excelPlan.kind, content: excelPlan.content, prompt: excelPlan.prompt, source_files: excelPlan.sourceFiles };
+      const activityDateId = mode === 'date' ? Number(target.activity_date_id) : 0;
+      const domain = mode === 'semester' ? '__ACTIVITY_SEMESTER__' : String(activityDateId);
+      try {
+        let parts: string[] = [];
+        const attachments: any[] = [];
+        if (mode === 'semester') {
+          const records = await queryAll<any>(
+            `SELECT d.activity_date,d.lesson_no,d.progress,COALESCE(s.summary,'') AS summary,
+               COALESCE(o.is_absent,0) AS is_absent,COALESCE(o.note,'') AS observation,
+               COALESCE(r.plus_text,'') AS plus_text,COALESCE(r.minus_text,'') AS minus_text,COALESCE(r.interesting_text,'') AS interesting_text
+             FROM activity_dates d
+             LEFT JOIN activity_summaries s ON s.activity_date_id=d.id AND s.student_id=?
+             LEFT JOIN activity_observations o ON o.activity_date_id=d.id AND o.student_id=?
+             LEFT JOIN activity_reflections r ON r.activity_date=d.activity_date AND r.student_id=?
+             WHERE d.class_id=? AND d.source_mode!='excel_deleted' ORDER BY d.activity_date`,
+            [student.id, student.id, student.id, cls.id]
+          );
+          if (!records.some(row => row.summary || row.observation || row.is_absent || row.plus_text || row.minus_text || row.interesting_text)) throw new Error('종합할 활동 기록이 없습니다.');
+          parts = [`[지시]\n${subjectSettings.comprehensive_prompt || '학생의 학기 전체 활동을 구체적 사실 중심으로 간결하게 종합한다. 학생 이름과 평가·점수는 쓰지 않는다.'}`,
+            `[학기 활동 기록]\n${records.map(row => `${row.activity_date} ${row.lesson_no}차시 ${row.progress}\n활동: ${row.summary}\n관찰: ${row.is_absent ? '결석' : row.observation}\n성찰: Plus ${row.plus_text} / Minus ${row.minus_text} / Interesting ${row.interesting_text}`).join('\n\n')}`,
+            '위 기록을 바탕으로 학기 활동 종합을 작성한다.'];
+        } else {
+          const date = await queryOne<any>("SELECT * FROM activity_dates WHERE id=? AND class_id=? AND source_mode!='excel_deleted'", [activityDateId, cls.id]);
+          if (!date) throw new Error('수업 날짜를 찾을 수 없습니다.');
+          let plan: any = await queryOne<any>('SELECT * FROM lesson_plans WHERE year=? AND semester=? AND grade=? AND subject=? AND lesson_no=? ORDER BY sort_order LIMIT 1', [cls.year, cls.semester, cls.grade, cls.subject, date.lesson_no]);
+          const excelPath = resolveStoredPath(subjectSettings.source_filepath || subjectSettings.excel_path || '');
+          if (!plan && subjectSettings.record_mode === 'excel' && excelPath) {
+            const excelPlan = (await WorkbookGateway.open(excelPath)).readPlans().find(item => item.lessonNo === Number(date.lesson_no));
+            if (excelPlan) plan = { kind: excelPlan.kind, content: excelPlan.content, prompt: excelPlan.prompt, source_files: excelPlan.sourceFiles };
+          }
+          const kindPrompt = plan?.kind === '실습' ? subjectSettings.practice_prompt : plan?.kind === '탐구' ? subjectSettings.inquiry_prompt : plan?.kind === '개념' ? subjectSettings.concept_prompt : subjectSettings.other_prompt;
+          parts = [subjectSettings.common_prompt || '제출물에 있는 사실만 쓰고 학생 이름과 평가·점수는 쓰지 않는다.', kindPrompt || '', plan?.prompt ? `[차시 추가 요청]\n${plan.prompt}` : '', `[차시]\n${date.lesson_no}차시\n진도: ${date.progress}\n내용: ${plan?.content || ''}`].filter(Boolean);
+          const files = await queryAll<any>('SELECT id,filename,filepath,mime_type FROM activity_files WHERE student_id=? AND activity_date_id=? ORDER BY uploaded_at,id', [student.id, activityDateId]);
+          const artifacts: ArtifactRow[] = files.map(file => ({ id: file.id, filename: file.filename, filepath: file.filepath, mime_type: file.mime_type }));
+          const sourceFiles = String(plan?.source_files || '').split(',').map(value => value.trim()).filter(Boolean);
+          for (const [sourceIndex, filename] of sourceFiles.entries()) {
+            const filepath = findSourceFile(subjectSettings.source_folder || '', filename);
+            if (filepath) artifacts.unshift({ id: -(sourceIndex + 1), filename, filepath, mime_type: mimeType(filename) });
+            else parts.push(`[원본 파일 누락]\n${filename}`);
+          }
+          await appendArtifactContents(parts, artifacts, llmSettings, attachments);
+          parts.push('학생 파일 전체를 바탕으로 이번 차시 활동을 요약한다. 다시 제출한 내용이 있으면 달라진 점을 먼저 쓴다.');
         }
-        const kindPrompt = plan?.kind === '실습' ? subjectSettings.practice_prompt : plan?.kind === '탐구' ? subjectSettings.inquiry_prompt : plan?.kind === '개념' ? subjectSettings.concept_prompt : subjectSettings.other_prompt;
-        parts = [subjectSettings.common_prompt || '제출물에 있는 사실만 쓰고 학생 이름과 평가·점수는 쓰지 않는다.', kindPrompt || '', plan?.prompt ? `[차시 추가 요청]\n${plan.prompt}` : '', `[차시]\n${date.lesson_no}차시\n진도: ${date.progress}\n내용: ${plan?.content || ''}`].filter(Boolean);
-        const files = await queryAll<any>('SELECT id,filename,filepath,mime_type FROM activity_files WHERE student_id=? AND activity_date_id=? ORDER BY uploaded_at,id', [student.id, activityDateId]);
-        fileIds = files.map(file => Number(file.id));
-        const artifacts: ArtifactRow[] = files.map(file => ({ id: file.id, filename: file.filename, filepath: file.filepath, mime_type: file.mime_type }));
-        const sourceFiles = String(plan?.source_files || '').split(',').map(value => value.trim()).filter(Boolean);
-        for (const [sourceIndex, filename] of sourceFiles.entries()) {
-          const filepath = findSourceFile(subjectSettings.source_folder || '', filename);
-          if (filepath) artifacts.unshift({ id: -(sourceIndex + 1), filename, filepath, mime_type: mimeType(filename) });
-          else parts.push(`[원본 파일 누락]\n${filename}`);
-        }
-        await appendArtifactContents(parts, artifacts, llmSettings, attachments);
-        parts.push('학생 파일 전체를 바탕으로 이번 차시 활동을 요약한다. 다시 제출한 내용이 있으면 달라진 점을 먼저 쓴다.');
+        const prompt = sanitizeStudentText(parts.join('\n\n---\n\n'), student);
+        const output = await callLLM(prompt, llmSettings, controller.signal, undefined, attachments, llmSettings.temperatures.recordsComments, undefined, {
+          type: 'object', properties: { summary: { type: 'string' } }, required: ['summary'], additionalProperties: false,
+        }, 'activity');
+        const summary = summaryFromResponse(output);
+        if (!summary) throw new Error('활동 기록 생성 결과가 비어 있습니다.');
+        completed += 1;
+        sendEvent({ type: 'progress', studentId: student.id, name: student.name, contentType: 'activity', domain, content: summary, completed, total: targets.length });
+      } catch (error) {
+        if (controller.signal.aborted) break;
+        completed += 1;
+        sendEvent({ type: 'error', studentId: student.id, name: student.name, contentType: 'activity', domain, error: error instanceof Error ? error.message : String(error), completed, total: targets.length });
       }
-      const prompt = sanitizeStudentText(parts.join('\n\n---\n\n'), student);
-      const output = await callLLM(prompt, llmSettings, undefined, undefined, attachments, llmSettings.temperatures.recordsComments, undefined, {
-        type: 'object', properties: { summary: { type: 'string' } }, required: ['summary'], additionalProperties: false,
-      }, 'activity');
-      const summary = summaryFromResponse(output);
-      if (mode === 'semester') {
-        await execute(`INSERT INTO activity_semester_summaries(student_id,summary,updated_at) VALUES(?,?,datetime('now')) ON CONFLICT(student_id) DO UPDATE SET summary=excluded.summary,updated_at=datetime('now')`, [student.id, summary]);
-      } else {
-        await execute(`INSERT INTO activity_summaries(student_id,activity_date_id,summary,manually_edited,updated_at) VALUES(?,?,?,0,datetime('now')) ON CONFLICT(student_id,activity_date_id) DO UPDATE SET summary=excluded.summary,manually_edited=0,updated_at=datetime('now')`, [student.id, activityDateId, summary]);
-        if (fileIds.length) await execute(`UPDATE activity_files SET summarized_at=datetime('now') WHERE id IN (${fileIds.map(() => '?').join(',')})`, fileIds);
-      }
-      completed += 1;
     }
-    res.json({ ok: true, requestCount: completed });
-  } catch (error) { res.status(500).json({ error: error instanceof Error ? error.message : String(error) }); }
+    sendEvent({ type: 'done', completed, total: targets.length });
+    res.end();
+  } catch (error) {
+    if (streamStarted) {
+      res.write(`data: ${JSON.stringify({ type: 'fatal', error: error instanceof Error ? error.message : String(error) })}\n\n`);
+      res.end();
+    } else res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
+  }
 });
 
 router.post('/:classId/batch', async (req, res) => {
@@ -559,7 +582,7 @@ router.post('/:classId/batch', async (req, res) => {
     const mode = req.body.mode === 'semester' ? 'semester' : 'date';
     const requestedTargets = Array.isArray(req.body.targets) ? req.body.targets : [];
     const targets = mode === 'semester'
-      ? await queryAll<any>('SELECT id AS student_id FROM class_students WHERE class_id=? ORDER BY student_num', [cls.id])
+      ? requestedTargets.map((item: any) => ({ student_id: Number(item.studentId) }))
       : requestedTargets.length
         ? requestedTargets.map((item: any) => ({ student_id: Number(item.studentId), activity_date_id: Number(item.activityDateId) }))
         : await queryAll<any>(

@@ -1062,13 +1062,26 @@ router.get('/claude-batch-jobs', async (req: Request, res: Response) => {
     );
     const jobs = rows.map((row) => {
       const metadata = JSON.parse(row.metadata || '{}') as {
-        requests?: Array<{ studentId: number }>;
+        requests?: Array<{ studentId: number; activityDateId?: number; mode?: 'date' | 'semester' }>;
         immediateUpdates?: Array<{ studentId: number }>;
       };
       const studentIds = Array.from(new Set([
         ...(metadata.requests || []).map((item) => item.studentId),
         ...(metadata.immediateUpdates || []).map((item) => item.studentId),
       ].filter((id): id is number => Number.isFinite(id))));
+      const activityLockMap = new Map<string, number[]>();
+      if (row.content_type === 'activity') {
+        for (const request of metadata.requests || []) {
+          const domain = request.mode === 'semester' ? '__ACTIVITY_SEMESTER__' : String(request.activityDateId || '');
+          if (!domain) continue;
+          const ids = activityLockMap.get(domain) || [];
+          if (!ids.includes(request.studentId)) ids.push(request.studentId);
+          activityLockMap.set(domain, ids);
+        }
+      }
+      const lockedCells = row.content_type === 'activity'
+        ? [...activityLockMap].map(([domain, ids]) => ({ contentType: 'activity', domain, studentIds: ids }))
+        : [{ contentType: row.content_type, domain: row.domain, studentIds }];
       return {
         id: row.provider_batch_id,
         classId: row.class_id,
@@ -1084,7 +1097,7 @@ router.get('/claude-batch-jobs', async (req: Request, res: Response) => {
         startedAt: row.created_at ? new Date(`${row.created_at}Z`).getTime() : Date.now(),
         mode: 'claude-batch',
         providerBatchIds: [row.provider_batch_id],
-        lockedCells: [{ contentType: row.content_type, domain: row.domain, studentIds }],
+        lockedCells,
       };
     });
     res.json({ jobs });
@@ -1141,26 +1154,6 @@ router.post('/claude-batch-results', async (req: Request, res: Response) => {
               const parsed = parseFirstJson<{ summary?: unknown }>(resultText, 'object');
               const summary = String(parsed.summary || '').trim();
               if (!summary) throw new Error('활동 요약 결과가 비어 있습니다.');
-              if (meta.mode === 'semester') {
-                await execute(
-                  `INSERT INTO activity_semester_summaries(student_id,summary,updated_at) VALUES(?,?,datetime('now'))
-                   ON CONFLICT(student_id) DO UPDATE SET summary=excluded.summary,updated_at=datetime('now')`,
-                  [meta.studentId, summary]
-                );
-              } else if (meta.activityDateId) {
-                await execute(
-                  `INSERT INTO activity_summaries(student_id,activity_date_id,summary,manually_edited,updated_at)
-                   VALUES(?,?,?,0,datetime('now')) ON CONFLICT(student_id,activity_date_id) DO UPDATE SET
-                   summary=excluded.summary,manually_edited=0,updated_at=datetime('now')`,
-                  [meta.studentId, meta.activityDateId, summary]
-                );
-                if (meta.fileIds?.length) {
-                  await execute(
-                    `UPDATE activity_files SET summarized_at=datetime('now') WHERE id IN (${meta.fileIds.map(() => '?').join(',')})`,
-                    meta.fileIds
-                  );
-                }
-              }
               updates.push({ studentId: meta.studentId, contentType: 'activity', domain: meta.mode === 'semester' ? '__ACTIVITY_SEMESTER__' : String(meta.activityDateId || ''), content: summary });
               continue;
             }
@@ -1186,7 +1179,10 @@ router.post('/claude-batch-results', async (req: Request, res: Response) => {
               updates.push({ studentId: meta.studentId, contentType: 'scoring', domain: job.domain, error: message, llmResult: resultText });
               updates.push({ studentId: meta.studentId, contentType: 'comments', domain: job.domain, error: message, llmResult: resultText });
             } else {
-              updates.push({ studentId: meta.studentId, contentType: job.content_type, domain: job.domain, error: e instanceof Error ? e.message : String(e), llmResult: resultText });
+              const errorDomain = job.content_type === 'activity'
+                ? (meta.mode === 'semester' ? '__ACTIVITY_SEMESTER__' : String(meta.activityDateId || ''))
+                : job.domain;
+              updates.push({ studentId: meta.studentId, contentType: job.content_type, domain: errorDomain, error: e instanceof Error ? e.message : String(e), llmResult: resultText });
             }
           }
         } else {
@@ -1195,10 +1191,13 @@ router.post('/claude-batch-results', async (req: Request, res: Response) => {
             updates.push({ studentId: meta.studentId, contentType: 'scoring', domain: job.domain, error });
             updates.push({ studentId: meta.studentId, contentType: 'comments', domain: job.domain, error });
           } else {
+            const errorDomain = job.content_type === 'activity'
+              ? (meta.mode === 'semester' ? '__ACTIVITY_SEMESTER__' : String(meta.activityDateId || ''))
+              : job.domain;
             updates.push({
               studentId: meta.studentId,
               contentType: job.content_type,
-              domain: job.domain,
+              domain: errorDomain,
               error,
             });
           }
