@@ -510,9 +510,7 @@ async function submissionStatusForRun(runId: string | number, sort: string) {
     [runId]
   );
   if (!run) return [];
-  const order = sort === 'default'
-    ? 'rst.sort_order ASC, rst.id ASC'
-    : 'rst.is_absent ASC, CASE WHEN sub.id IS NULL THEN 1 ELSE 0 END ASC, sub.submitted_at DESC, sub.id DESC, rst.class_num ASC, rst.seat_num ASC, rst.name ASC';
+  const order = 'rst.class_num ASC, rst.seat_num ASC, rst.name ASC, rst.id ASC';
   const rows = await queryAll<any>(
     `SELECT
        rst.id AS run_student_id,
@@ -602,7 +600,7 @@ async function submissionStatusForRun(runId: string | number, sort: string) {
     current.push(file);
     filesByStudent.set(key, current);
   }
-  return rows.map(row => {
+  const hydratedRows = rows.map(row => {
     const key = row.assignment_student_id != null
       ? `id:${Number(row.assignment_student_id)}`
       : `identity:${Number(row.student_num)}\u0000${row.name}`;
@@ -622,6 +620,25 @@ async function submissionStatusForRun(runId: string | number, sort: string) {
       active_files: files,
       pending_approval,
     };
+  });
+  if (sort === 'default') return hydratedRows;
+
+  const recentGroup = (row: any) => {
+    if (Number(row.is_absent || 0) === 1) return 3;
+    if (row.pending_approval || (row.submission_id && Number(row.teacher_checked || 0) !== 1)) return 0;
+    if (!row.submission_id) return 1;
+    return 2;
+  };
+  const recentTime = (row: any) => String(row.pending_approval?.created_at || row.submitted_at || '');
+  return hydratedRows.sort((a, b) => {
+    const groupDifference = recentGroup(a) - recentGroup(b);
+    if (groupDifference) return groupDifference;
+    const timeDifference = recentTime(b).localeCompare(recentTime(a));
+    if (timeDifference) return timeDifference;
+    return Number(a.class_num) - Number(b.class_num)
+      || Number(a.seat_num) - Number(b.seat_num)
+      || String(a.name).localeCompare(String(b.name), 'ko')
+      || Number(a.run_student_id) - Number(b.run_student_id);
   });
 }
 
@@ -649,7 +666,7 @@ app.get(['/', '/admin'], requireLocal, (_req, res) => {
   <div class="card" style="margin-top:16px">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
       <h2 style="margin:0">제출 현황</h2>
-      <select id="sort" style="width:auto;height:36px;font-size:14px"><option value="default">기본순</option><option value="recent">제출순</option></select>
+      <select id="sort" style="width:auto;height:36px;font-size:14px"><option value="recent">제출순</option><option value="default">학번순</option></select>
     </div>
     <div id="summary" class="summary"></div>
     <div id="submissions"></div>
@@ -704,7 +721,7 @@ teacherApp.get('/', async (req, res) => {
 </main>`));
   }
   res.send(page(`${run.title} 제출 현황`, `
-<header><strong>${escapeHtml(run.title)} / ${escapeHtml(run.room)}</strong><div class="row"><span class="${run.is_open ? 'ok' : 'danger'}">${run.is_open ? '진행 중' : '종료'}</span><select id="sort"><option value="default">기본순</option><option value="recent">제출순</option></select></div></header>
+<header><strong>${escapeHtml(run.title)} / ${escapeHtml(run.room)}</strong><div class="row"><span class="${run.is_open ? 'ok' : 'danger'}">${run.is_open ? '진행 중' : '종료'}</span><select id="sort"><option value="recent">제출순</option><option value="default">학번순</option></select></div></header>
 <main>${studentLink}<div id="summary" class="summary"></div><div id="submissions"></div></main>
 <script src="/page-assets/teacher.js"></script>
 `));

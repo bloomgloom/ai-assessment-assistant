@@ -26,3 +26,6 @@ assessment/template/
 *.zip
 submission-server-security-plan.md
 .DS_Store
+
+# 일회성 지시, 템플릿
+_temp/
