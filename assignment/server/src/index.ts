@@ -138,7 +138,7 @@ function localIps() {
 }
 
 function clientIp(req: any) {
-  return String(req.headers['x-forwarded-for'] || req.socket.remoteAddress || '').split(',')[0].trim();
+  return String(req.socket.remoteAddress || '');  // 프록시 뒤에서 돌지 않으므로 보내는 쪽이 적는 헤더는 믿지 않습니다.
 }
 
 function isLocalRequest(req: any) {
