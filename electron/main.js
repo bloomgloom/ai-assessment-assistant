@@ -515,7 +515,7 @@ async function createWindow() {
   ipcMain.removeHandler('open-directory');
   ipcMain.handle('display-sleep-prevention', (event, enabled) => {
     if (!mainWindow || event.sender !== mainWindow.webContents) return false;
-    if (enabled && activeMode !== 'assessment') return false;
+    if (enabled && !activeMode) return false;
     return setDisplaySleepPrevention(Boolean(enabled));
   });
   ipcMain.handle('save-file', async (event, { filename, data }) => {

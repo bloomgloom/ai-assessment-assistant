@@ -33,6 +33,7 @@ async function loadClasses(){ const cfg=selectedConfig(); classes=cfg?await j('/
 function runLabel(r){return (r.is_open?'[진행중] ':'[종료] ')+r.title+' / '+r.room+' / '+r.started_at;}
 function setControlsLocked(locked){[yearSel,semesterSel,gradeSel,subjectSel,domainSel,classSel].forEach(el=>el.disabled=locked);targetFilter.style.display=locked?'none':'';const exitBtn=document.getElementById('exitBtn');if(exitBtn){if(locked){exitBtn.classList.add('disabled');exitBtn.removeAttribute('href');}else{exitBtn.classList.remove('disabled');exitBtn.setAttribute('href','app://launcher');}}}
 function updateLinks(r){
+ window.assessmentDesktop?.setDisplaySleepPrevention?.(Boolean(r&&Number(r.is_open)))?.catch(()=>{});
  if(!r){links.innerHTML='';runToggle.textContent='시작';runToggle.className='';setControlsLocked(false);return;}
  runToggle.textContent=Number(r.is_open)?'종료':'시작';
  runToggle.className=Number(r.is_open)?'secondary':'';
