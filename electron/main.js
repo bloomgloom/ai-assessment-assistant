@@ -147,7 +147,7 @@ function fileDialogDefaultPath(filename) {
 function setDisplaySleepPrevention(enabled) {
   if (enabled) {
     if (displaySleepBlockerId === null || !powerSaveBlocker.isStarted(displaySleepBlockerId)) {
-      displaySleepBlockerId = powerSaveBlocker.start('prevent-display-sleep');
+      displaySleepBlockerId = powerSaveBlocker.start('prevent-app-suspension');
     }
     return true;
   }
