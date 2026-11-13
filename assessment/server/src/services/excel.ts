@@ -49,6 +49,41 @@ export interface ScoringFileData {
   students: ClassStudent[];
 }
 
+function excelTextWidth(value: string): number {
+  return Array.from(value).reduce((width, char) => {
+    if (/\p{Script=Hangul}/u.test(char) || /[\u3000-\u9fff\uff01-\uff60]/u.test(char)) return width + 2;
+    return width + 1;
+  }, 0);
+}
+
+/**
+ * ExcelJS는 wrapText를 설정해도 행 높이를 자동으로 맞추지 않습니다.
+ * 열 너비와 셀 내용에 맞춰 줄 수를 추정해 긴 텍스트가 가려지지 않게 합니다.
+ */
+export function fitWrappedRowHeights(
+  sheet: ExcelJS.Worksheet,
+  options: { startRow?: number; minHeight?: number; maxHeight?: number } = {}
+): void {
+  const startRow = options.startRow ?? 1;
+  const minHeight = options.minHeight ?? 18;
+  const maxHeight = options.maxHeight ?? 409;
+
+  for (let rowNumber = startRow; rowNumber <= sheet.rowCount; rowNumber += 1) {
+    const row = sheet.getRow(rowNumber);
+    let lineCount = 1;
+    row.eachCell({ includeEmpty: false }, (cell, columnNumber) => {
+      const text = String(cell.text ?? '');
+      const columnWidth = Math.max(1, (sheet.getColumn(columnNumber).width ?? 10) - 1);
+      const wrappedLines = text.split(/\r?\n/).reduce(
+        (total, line) => total + Math.max(1, Math.ceil(excelTextWidth(line) / columnWidth)),
+        0
+      );
+      lineCount = Math.max(lineCount, wrappedLines);
+    });
+    row.height = Math.min(maxHeight, Math.max(minHeight, lineCount * 15 + 3));
+  }
+}
+
 /**
  * 파일명에서 수업 정보를 파싱합니다.
  * 형식: "수행평가 파일일괄등록 - 2026학년도 1학기 2 정보(3)_전체영역_1강의실.xlsx"
