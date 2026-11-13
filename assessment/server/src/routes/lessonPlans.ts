@@ -8,6 +8,7 @@ import { execute, queryAll, queryOne, transaction } from '../services/db';
 import { WorkbookGateway, type JournalClassroom, type LessonPlanRow } from '../services/lessonPlanExcel';
 import { decodeUploadFilename } from '../services/filename';
 import { ensureDir, moveFileToTrash, resolveStoredPath, toStoredPath, UPLOADS_DIR } from '../services/storage';
+import { treeBackupFilename } from '../services/backupFilename';
 
 const router = Router();
 const LESSON_PLAN_UPLOAD_DIR = path.join(UPLOADS_DIR, 'lesson-plans');
@@ -428,7 +429,7 @@ router.get('/backup/export', async (req, res) => {
   comprehensive.addRow(['공통', settings.comprehensive_prompt]);
   formatWorkbook(workbook);
   const buffer = await workbook.xlsx.writeBuffer();
-  const filename = `${value.year}_${value.semester}학기_${value.grade}학년_${value.subject}_수업계획_백업.xlsx`;
+  const filename = treeBackupFilename({ ...value, kind: '수업계획' });
   res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
   res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${safeDownloadName(filename)}`);
   res.send(Buffer.from(buffer));

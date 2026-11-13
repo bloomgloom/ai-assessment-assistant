@@ -11,6 +11,7 @@ import { useAiEnabled } from '../../hooks/useAiEnabled';
 import { useRecordsTree } from './useRecordsTree';
 import { useRecordsUpload } from './useRecordsUpload';
 import { saveBlob } from '../../lib/desktopFiles';
+import { downloadFilename, roomNumber, treeBackupFilename } from '../../lib/backupFilename';
 import { diffChars, type Change } from 'diff';
 import { StableTextarea } from '../../components/common/StableTextarea';
 import { BulkImportResultDialog } from '../../components/common/BulkImportResultDialog';
@@ -1144,20 +1145,18 @@ export function useRecordsPage() {
     } catch { alert('내보내기 실패'); }
   };
 
-  const getDownloadFilename = (disposition: string, fallback: string) => {
-    const utf8Match = disposition.match(/filename\*=UTF-8''(.+)/i);
-    const plainMatch = disposition.match(/filename="?([^";]+)"?/i);
-    return utf8Match ? decodeURIComponent(utf8Match[1]) : plainMatch ? plainMatch[1] : fallback;
-  };
-
   const handleExportFullRecords = async () => {
     if (!selectedClass) return;
     try {
       const r = await recordsApi.exportFull(selectedClass.id);
       await saveBlob(
-        getDownloadFilename(
+        downloadFilename(
           r.headers['content-disposition'] || '',
-          `전체기록_${selectedClass.year}_${selectedClass.subject}_${selectedClass.room}.xlsx`
+          treeBackupFilename({
+            ...selectedClass,
+            scope: roomNumber(selectedClass.room),
+            kind: '채점기록',
+          })
         ),
         r.data
       );

@@ -1,6 +1,7 @@
 import { ChangeEvent, useRef } from 'react';
 import { criteriaApi } from '../../lib/api';
 import { saveBlob } from '../../lib/desktopFiles';
+import { downloadFilename, treeBackupFilename } from '../../lib/backupFilename';
 import { useDismissibleGuide } from '../../hooks/useDismissibleGuide';
 import { CRITERIA_GUIDE_KEY } from './constants';
 import { useCriteriaStandardsUpload } from './useCriteriaStandardsUpload';
@@ -17,12 +18,6 @@ export function useCriteriaController() {
     clearSelection: criteria.clearSelection,
   });
 
-  const getDownloadFilename = (disposition: string, fallback: string) => {
-    const utf8Match = disposition.match(/filename\*=UTF-8''(.+)/i);
-    const plainMatch = disposition.match(/filename="?([^";]+)"?/i);
-    return utf8Match ? decodeURIComponent(utf8Match[1]) : plainMatch ? plainMatch[1] : fallback;
-  };
-
   const handleDownloadConfig = async () => {
     if (!criteria.selected) return;
     try {
@@ -34,9 +29,17 @@ export function useCriteriaController() {
         criteria.selected.domain_name
       );
       await saveBlob(
-        getDownloadFilename(
+        downloadFilename(
         r.headers['content-disposition'] || '',
-        `${criteria.selected.year}_${criteria.selected.subject}_${criteria.selected.domain_name}_성취기준.xlsx`
+        treeBackupFilename({
+          year: criteria.selected.year,
+          semester: criteria.selected.semester,
+          grade: criteria.selected.grade,
+          subject: criteria.selected.subject,
+          scope: criteria.selected.domain_name,
+          compactScope: true,
+          kind: '성취기준',
+        })
         ),
         r.data
       );

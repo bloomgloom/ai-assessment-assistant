@@ -66,8 +66,8 @@ function collectAnthropicOutputOptionPairs(provider: string, options: unknown): 
 }
 
 function makeBackupFilename() {
-  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-  return `assessment-backup-${stamp}.zip`;
+  const stamp = new Date().toISOString().replace(/[-:]/g, '').replace('T', '_').replace(/\.\d{3}Z$/, '');
+  return `앱데이터_${stamp}.zip`;
 }
 
 function assertSafeZip(zip: AdmZip) {
@@ -337,7 +337,7 @@ router.get('/backup', async (_req: Request, res: Response) => {
     const filename = makeBackupFilename();
 
     res.setHeader('Content-Type', 'application/zip');
-    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(filename)}`);
     res.setHeader('Content-Length', String(buffer.length));
     res.send(buffer);
   } catch (e: unknown) {

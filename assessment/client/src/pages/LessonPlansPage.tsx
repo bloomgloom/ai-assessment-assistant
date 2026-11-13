@@ -11,6 +11,7 @@ import { useResizableTable } from '../components/common/useResizableTable';
 import { useAcademicTreeController } from '../hooks/useAcademicTreeController';
 import { aiApi, lessonPlansApi, type AcademicSubjectScope } from '../lib/api';
 import { saveBlob } from '../lib/desktopFiles';
+import { downloadFilename, treeBackupFilename } from '../lib/backupFilename';
 import { useRecordsUnsavedStore } from '../stores/recordsUnsavedStore';
 
 interface LessonSubject extends AcademicSubjectScope { has_source: number }
@@ -60,13 +61,6 @@ function parseAiJson(value: unknown) {
   if (typeof value === 'object' && value) return value as any;
   const text = String(value || '').trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
   return JSON.parse(text);
-}
-
-function downloadFilename(disposition: string, fallback: string) {
-  const utf8 = disposition.match(/filename\*=UTF-8''([^;]+)/i);
-  const plain = disposition.match(/filename="?([^";]+)"?/i);
-  if (utf8) try { return decodeURIComponent(utf8[1]); } catch { return utf8[1]; }
-  return plain?.[1] || fallback;
 }
 
 function PromptCard({ label, value, onChange, placeholder, fillHeight = false }: {
@@ -234,7 +228,10 @@ export default function LessonPlansPage({ embeddedSubject, embeddedTab }: Lesson
   const handleBackupDownload = async () => {
     if (!selected) return;
     const response = await lessonPlansApi.exportBackup(selected);
-    await saveBlob(downloadFilename(response.headers['content-disposition'] || '', `${selected.subject}_수업계획_백업.xlsx`), response.data);
+    await saveBlob(downloadFilename(
+      response.headers['content-disposition'] || '',
+      treeBackupFilename({ ...selected, kind: '수업계획' })
+    ), response.data);
   };
 
   const handlePlanDownload = async () => {

@@ -7,6 +7,7 @@ import { queryAll, queryOne, execute, transaction } from '../services/db';
 import { UPLOADS_DIR, ensureDir, resolveStoredPath } from '../services/storage';
 import { fitWorksheetColumns, parseScoringExcel, parseStudentExcel, exportToExcel, writeScoringToExcel, writeCommentsToExcel } from '../services/excel';
 import { decodeUploadFilename } from '../services/filename';
+import { roomNumber, treeBackupFilename } from '../services/backupFilename';
 
 const UPLOAD_DIR = path.join(UPLOADS_DIR, 'records');
 ensureDir(UPLOAD_DIR);
@@ -288,7 +289,14 @@ router.get('/export-full/:classId', async (req: Request, res: Response) => {
   }
 
   const buffer = Buffer.from(await wb.xlsx.writeBuffer());
-  const filename = `전체기록_${cls.year}_${cls.semester}_${cls.grade}_${cls.subject}_${cls.room}.xlsx`;
+  const filename = treeBackupFilename({
+    year: cls.year,
+    semester: cls.semester,
+    grade: cls.grade,
+    subject: cls.subject,
+    scope: roomNumber(cls.room),
+    kind: '채점기록',
+  });
   res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
   res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(filename)}`);
   res.send(buffer);

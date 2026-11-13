@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { criteriaApi, aiApi, assignmentConfigsApi } from '../../lib/api';
 import { saveBlob } from '../../lib/desktopFiles';
+import { downloadFilename, treeBackupFilename } from '../../lib/backupFilename';
 import { parseFirstJson } from '../../lib/json';
 import { useAiAction } from '../../hooks/useAiAction';
 import {
@@ -594,12 +595,6 @@ export function useDomainController() {
     if (selectedSubject && selectedDomain) await loadAssignment(selectedSubject, selectedDomain, false);
   };
 
-  const getDownloadFilename = (disposition: string, fallback: string) => {
-    const utf8Match = disposition.match(/filename\*=UTF-8''(.+)/i);
-    const plainMatch = disposition.match(/filename="?([^";]+)"?/i);
-    return utf8Match ? decodeURIComponent(utf8Match[1]) : plainMatch ? plainMatch[1] : fallback;
-  };
-
   const handleDownloadConfig = async () => {
     if (!selectedSubject) return;
     try {
@@ -618,11 +613,11 @@ export function useDomainController() {
           selectedSubject.subject
         );
       await saveBlob(
-        getDownloadFilename(
+        downloadFilename(
           r.headers['content-disposition'] || '',
           selectedDomain
-            ? `${selectedSubject.year}_${selectedSubject.subject}_${selectedDomain}_기준.xlsx`
-            : `${selectedSubject.year}_${selectedSubject.subject}_평가영역.xlsx`
+            ? treeBackupFilename({ ...selectedSubject, scope: selectedDomain, compactScope: true, kind: '평가기준' })
+            : treeBackupFilename({ ...selectedSubject, kind: '평가영역' })
         ),
         r.data
       );

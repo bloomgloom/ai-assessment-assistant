@@ -16,6 +16,7 @@ import { useRecordsTree } from '../features/records/useRecordsTree';
 import type { ClassItem, RecordsTreeNode } from '../features/records/types';
 import { activityApi, classesApi, lessonPlansApi, type AcademicSubjectScope } from '../lib/api';
 import { openDirectory, saveBlob } from '../lib/desktopFiles';
+import { downloadFilename, treeBackupFilename } from '../lib/backupFilename';
 import { useAiBatchStore, type ActivityGenerationRequest } from '../stores/aiBatchStore';
 import { useRecordsUnsavedStore } from '../stores/recordsUnsavedStore';
 
@@ -425,8 +426,11 @@ export default function ActivityPage() {
   const downloadBackup = async () => {
     if (!selectedClass) return;
     try {
-      const { data } = await lessonPlansApi.exportBackup(scopeOf(selectedClass));
-      await saveBlob(`${selectedClass.year}학년도 ${selectedClass.semester}학기 ${selectedClass.grade}학년 ${selectedClass.subject} 작업 백업.xlsx`, data);
+      const response = await lessonPlansApi.exportBackup(scopeOf(selectedClass));
+      await saveBlob(downloadFilename(
+        response.headers['content-disposition'] || '',
+        treeBackupFilename({ ...selectedClass, kind: '수업계획' })
+      ), response.data);
     } catch (error: any) { alert(error?.response?.data?.error || '백업 다운로드에 실패했습니다.'); }
   };
   const startRecord = async (requestMode: 'immediate' | 'batch') => {

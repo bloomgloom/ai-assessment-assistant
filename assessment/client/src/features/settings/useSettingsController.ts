@@ -1,6 +1,7 @@
 import { SetStateAction, useEffect, useState } from 'react';
 import { settingsApi } from '../../lib/api';
 import { saveBlob } from '../../lib/desktopFiles';
+import { downloadFilename } from '../../lib/backupFilename';
 import { ANTHROPIC_OUTPUT_TASKS, DEFAULT_MODELS, DEFAULT_TEMPERATURES, DEFAULT_URLS, supportsTemperature } from './constants';
 import { AiTemperatures, AnthropicEffort, AnthropicOutputOptions, AnthropicOutputTask, GeminiThinkingLevel, OpenAIReasoningEffort, SettingsState } from './types';
 
@@ -544,8 +545,8 @@ export function useSettingsController() {
       const r = await settingsApi.backup();
       const blob = new Blob([r.data], { type: 'application/zip' });
       const disposition = String(r.headers['content-disposition'] || '');
-      const match = disposition.match(/filename="?([^"]+)"?/);
-      const filename = match?.[1] || `assessment-backup-${new Date().toISOString().replace(/[:.]/g, '-')}.zip`;
+      const stamp = new Date().toISOString().replace(/[-:]/g, '').replace('T', '_').replace(/\.\d{3}Z$/, '');
+      const filename = downloadFilename(disposition, `앱데이터_${stamp}.zip`);
       await saveBlob(filename, blob);
     } catch (e: unknown) {
       const msg =

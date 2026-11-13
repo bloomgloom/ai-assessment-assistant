@@ -7,6 +7,7 @@ import { queryAll, queryOne, execute, transaction } from '../services/db';
 import { UPLOADS_DIR, ensureDir } from '../services/storage';
 import { decodeUploadFilename } from '../services/filename';
 import { parseAreaManagementExcel, parseAchievementStandardsExcel } from '../services/excel';
+import { treeBackupFilename } from '../services/backupFilename';
 import informationCurriculumStandards from '../data/informationCurriculumStandards.json';
 import {
   deleteAssignmentConfigsForScope,
@@ -781,7 +782,9 @@ router.get('/standards-config/export', async (req: Request, res: Response) => {
 
   const buffer = Buffer.from(await wb.xlsx.writeBuffer());
   res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-  res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${safeDownloadName(`${year}_${semester}_${grade}_${subject}_${domainName}_성취기준.xlsx`)}`);
+  res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${safeDownloadName(treeBackupFilename({
+    year, semester, grade, subject, scope: domainName, compactScope: true, kind: '성취기준',
+  }))}`);
   res.send(buffer);
 });
 
@@ -1083,7 +1086,9 @@ router.get('/subject-config/export', async (req: Request, res: Response) => {
   formatConfigWorkbook(wb);
   const buffer = Buffer.from(await wb.xlsx.writeBuffer());
   res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-  res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${safeDownloadName(`${year}_${semester}_${grade}_${subject}_평가영역.xlsx`)}`);
+  res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${safeDownloadName(treeBackupFilename({
+    year, semester, grade, subject, kind: '평가영역',
+  }))}`);
   res.send(buffer);
 });
 
@@ -1312,7 +1317,9 @@ router.get('/domain-config/export', async (req: Request, res: Response) => {
   const buffer = Buffer.from(await wb.xlsx.writeBuffer());
   const safeDomain = domainName === '__SUBJECT_COMPREHENSIVE__' ? '세특' : domainName;
   res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-  res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${safeDownloadName(`${year}_${semester}_${grade}_${subject}_${safeDomain}_기준.xlsx`)}`);
+  res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${safeDownloadName(treeBackupFilename({
+    year, semester, grade, subject, scope: safeDomain, compactScope: true, kind: '평가기준',
+  }))}`);
   res.send(buffer);
 });
 
