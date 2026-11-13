@@ -5,7 +5,7 @@ import fs from 'fs';
 import ExcelJS from 'exceljs';
 import { queryAll, queryOne, execute, transaction } from '../services/db';
 import { UPLOADS_DIR, ensureDir, resolveStoredPath } from '../services/storage';
-import { parseScoringExcel, parseStudentExcel, exportToExcel, writeScoringToExcel, writeCommentsToExcel } from '../services/excel';
+import { fitWorksheetColumns, parseScoringExcel, parseStudentExcel, exportToExcel, writeScoringToExcel, writeCommentsToExcel } from '../services/excel';
 import { decodeUploadFilename } from '../services/filename';
 
 const UPLOAD_DIR = path.join(UPLOADS_DIR, 'records');
@@ -283,10 +283,7 @@ router.get('/export-full/:classId', async (req: Request, res: Response) => {
 
   for (const sheet of wb.worksheets) {
     sheet.getRow(1).font = { bold: true };
-    sheet.columns.forEach(col => {
-      col.width = Math.max(12, Math.min(60, Math.max(...(col.values || []).map(v => String(v || '').length + 4))));
-      col.alignment = { vertical: 'top', wrapText: true };
-    });
+    fitWorksheetColumns(sheet);
     sheet.views = [{ state: 'frozen', ySplit: 1 }];
   }
 

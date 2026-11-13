@@ -50,6 +50,27 @@ export interface ScoringFileData {
 }
 
 /**
+ * ExcelJS column.values는 첫 행 앞에 빈 슬롯이 있는 희소 배열입니다.
+ * 빈 슬롯을 제외하고 너비를 계산해 NaN이 기본 열 너비로 저장되는 것을 막습니다.
+ */
+export function fitWorksheetColumns(
+  sheet: ExcelJS.Worksheet,
+  options: { minWidth?: number; maxWidth?: number; padding?: number } = {}
+): void {
+  const minWidth = options.minWidth ?? 12;
+  const maxWidth = options.maxWidth ?? 60;
+  const padding = options.padding ?? 4;
+
+  sheet.columns.forEach(column => {
+    const widths = (column.values || []).flatMap(value => value == null
+      ? []
+      : String(value).split(/\r?\n/).map(line => line.length + padding));
+    column.width = Math.max(minWidth, Math.min(maxWidth, widths.length ? Math.max(...widths) : minWidth));
+    column.alignment = { vertical: 'top', wrapText: true };
+  });
+}
+
+/**
  * 파일명에서 수업 정보를 파싱합니다.
  * 형식: "수행평가 파일일괄등록 - 2026학년도 1학기 2 정보(3)_전체영역_1강의실.xlsx"
  *
