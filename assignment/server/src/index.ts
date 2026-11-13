@@ -308,7 +308,9 @@ table{width:100%;border-collapse:collapse;background:#fff}
 th,td{border:1px solid #e5e7eb;padding:8px;text-align:left;font-size:13px}
 th{background:#f9fafb;color:#4b5563}
 .muted{color:#6b7280;font-size:15px}.danger{color:#dc2626}.ok{color:#15803d}.guide{line-height:1.75;font-size:16px}.guide p{font-size:16px}.guide h1{font-size:24px}.guide h2{font-size:20px}.guide h3{font-size:18px}.guide ul,.guide ol{padding-left:22px}.guide blockquote{margin:16px 0;padding:8px 16px;border-left:4px solid #94a3b8;background:#f8fafc;color:#475569}.guide table{margin:14px 0}.guide th{font-weight:700}
+.teacher-board-header{height:76px;padding:0 32px;gap:24px}.teacher-board-header>strong{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:clamp(24px,2vw,32px);font-weight:800}.teacher-board-toolbar{display:flex;flex:0 0 auto;align-items:center;gap:12px;flex-wrap:nowrap;white-space:nowrap}.teacher-board-status{display:inline-flex;align-items:center;min-height:46px;padding:0 16px;border-radius:999px;background:#dcfce7;color:#166534;font-size:20px;font-weight:800}.teacher-board-status.danger{background:#fee2e2;color:#b91c1c}.teacher-board-toolbar select{width:auto;min-width:132px;height:48px;padding:0 40px 0 16px;font-size:20px;font-weight:800}.teacher-board{max-width:1680px;padding:24px 32px 36px}.board-access-card{display:flex;align-items:baseline;justify-content:center;gap:20px;padding:16px 22px!important}.board-access-card .muted{flex:0 0 auto;font-size:20px;font-weight:700}.board-access-card .board-access-url{margin-top:0!important;font-size:clamp(30px,3vw,44px)!important;line-height:1.15}.teacher-board .summary{gap:24px;margin:18px 0;padding:16px 20px;border-width:2px;border-radius:12px}.teacher-board .summary span{font-size:22px}.teacher-board .complete-badge{padding:7px 14px;font-size:18px}.teacher-board #submissions{overflow-x:auto;border-radius:10px;box-shadow:0 4px 16px rgba(15,23,42,.06)}.teacher-board table{min-width:1180px}.teacher-board th,.teacher-board td{padding:12px 10px;font-size:18px;line-height:1.35}.teacher-board th{font-size:17px;white-space:nowrap}.teacher-board td:nth-child(-n+2){text-align:center}.teacher-board td:nth-child(4),.teacher-board td:nth-child(5),.teacher-board td:nth-child(6),.teacher-board td:nth-child(7){white-space:nowrap}.teacher-board td:nth-child(7){font-size:20px;font-weight:800}.teacher-board td .muted,.teacher-board td a{font-size:17px}.teacher-board input[type=checkbox]{width:24px;height:24px;cursor:pointer}.teacher-board .row{flex-wrap:nowrap}.teacher-board td button{height:42px;font-size:17px}
 @media(max-width:900px){.grid,.student-layout,.admin-controls,.student-fields{grid-template-columns:1fr}main{padding:14px}header{padding:0 14px}}
+@media(max-width:900px){.teacher-board-header{height:auto;min-height:70px;padding:10px 14px}.teacher-board-header>strong{font-size:22px}.teacher-board-toolbar{gap:8px}.teacher-board-status{min-height:42px;padding:0 12px;font-size:17px}.teacher-board-toolbar select{min-width:112px;height:44px;padding-left:12px;font-size:17px}.teacher-board{padding:16px 14px 28px}.board-access-card{align-items:center;gap:8px;flex-direction:column}.board-access-card .board-access-url{font-size:28px!important}.teacher-board .summary{gap:12px}.teacher-board .summary span{font-size:19px}}
 </style>
 </head>
 <body>${body}</body>
@@ -695,20 +697,20 @@ app.get('/s/:shareCode', async (req, res) => {
 
 teacherApp.get('/', async (req, res) => {
   const studentUrl = `http://${localIps()[0] || '127.0.0.1'}:${STUDENT_PORT}`;
-  const studentLink = `<section class="card" style="margin-bottom:16px;text-align:center">
+  const studentLink = `<section class="card board-access-card" style="margin-bottom:16px;text-align:center">
     <div class="muted">학생 접속 주소</div>
-    <a href="${escapeHtml(studentUrl)}" target="_blank" rel="noopener" style="display:inline-block;margin-top:6px;font-size:32px;font-weight:800;word-break:break-all">${escapeHtml(studentUrl)}</a>
+    <a class="board-access-url" href="${escapeHtml(studentUrl)}" target="_blank" rel="noopener" style="display:inline-block;margin-top:6px;font-size:32px;font-weight:800;word-break:break-all">${escapeHtml(studentUrl)}</a>
   </section>`;
   const run = await currentOpenRun();
   if (!run) {
     return res.send(page('교사용 확인', `
-<header><strong>교사용 확인</strong><span class="danger">대기 중</span></header>
-<main>${studentLink}<section class="card"><h2>진행 중인 수행이 없습니다</h2><p class="muted">수행이 시작되면 이 화면에 현황이 표시됩니다.</p></section></main>`));
+<header class="teacher-board-header"><strong>교사용 확인</strong><span class="teacher-board-status danger">대기 중</span></header>
+<main class="teacher-board">${studentLink}<section class="card"><h2>진행 중인 수행이 없습니다</h2><p class="muted">수행이 시작되면 이 화면에 현황이 표시됩니다.</p></section></main>`));
   }
   if (!(await isTeacherAuthenticated(req, false))) {
     return res.send(page('교사용 확인', `
-<header><strong>교사용 확인</strong><span class="muted">비밀번호 필요</span></header>
-<main>
+<header class="teacher-board-header"><strong>교사용 확인</strong><span class="teacher-board-status danger">비밀번호 필요</span></header>
+<main class="teacher-board">
   ${studentLink}
   <section class="card" style="max-width:420px;margin:40px auto">
     <h2>교사 비밀번호</h2>
@@ -721,8 +723,8 @@ teacherApp.get('/', async (req, res) => {
 </main>`));
   }
   res.send(page(`${run.title} 제출 현황`, `
-<header><strong>${escapeHtml(run.title)} / ${escapeHtml(run.room)}</strong><div class="row"><span class="${run.is_open ? 'ok' : 'danger'}">${run.is_open ? '진행 중' : '종료'}</span><select id="sort"><option value="recent">제출순</option><option value="default">학번순</option></select></div></header>
-<main>${studentLink}<div id="summary" class="summary"></div><div id="submissions"></div></main>
+<header class="teacher-board-header"><strong>${escapeHtml(run.title)} / ${escapeHtml(run.room)}</strong><div class="teacher-board-toolbar"><span class="teacher-board-status ${run.is_open ? 'ok' : 'danger'}">${run.is_open ? '진행 중' : '종료'}</span><select id="sort" aria-label="학생 정렬"><option value="recent">제출순</option><option value="default">학번순</option></select></div></header>
+<main class="teacher-board">${studentLink}<div id="summary" class="summary"></div><div id="submissions"></div></main>
 <script src="/page-assets/teacher.js"></script>
 `));
 });

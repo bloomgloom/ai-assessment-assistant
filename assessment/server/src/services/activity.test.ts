@@ -126,13 +126,29 @@ async function main() {
     const zip = new AdmZip();
     zip.addLocalFolder(folder);
     zip.writeZip(zipPath);
-    assert.deepEqual((await entriesFromFolder(folder)).map(item => item.relativePath), (await entriesFromZip(zipPath)).map(item => item.relativePath));
-    assert.deepEqual((await entriesFromImportSource({ folderPath: folder })).map(item => item.relativePath), (await entriesFromImportSource({ zipPath })).map(item => item.relativePath));
+    assert.deepEqual((await entriesFromFolder(folder)).map(item => item.relativePath), [path.join('source', '8월 11일', '20101_테스트__2099-08-11_1000__work.txt')]);
+    assert.deepEqual((await entriesFromZip(zipPath)).map(item => item.relativePath), ['8월 11일/20101_테스트__2099-08-11_1000__work.txt']);
+    assert.deepEqual((await entriesFromImportSource({ folderPath: folder })).map(item => item.relativePath), [path.join('source', '8월 11일', '20101_테스트__2099-08-11_1000__work.txt')]);
+    assert.deepEqual((await entriesFromImportSource({ zipPath })).map(item => item.relativePath), ['8월 11일/20101_테스트__2099-08-11_1000__work.txt']);
+
+    const dateFolder = path.join(root, '2026-11-03 11월 3일');
+    fs.mkdirSync(dateFolder);
+    fs.writeFileSync(path.join(dateFolder, '20101_가나다__code.py'), 'print("ok")');
+    const dateFolderEntries = await entriesFromFolder(dateFolder);
+    assert.equal(dateFolderEntries[0].relativePath, path.join('2026-11-03 11월 3일', '20101_가나다__code.py'));
+    assert.equal(activityDateFromPath(dateFolderEntries[0].relativePath), '2026-11-03');
+
+    const studentFolder = path.join(root, '20101_가나다');
+    fs.mkdirSync(studentFolder);
+    fs.writeFileSync(path.join(studentFolder, 'code.py'), 'print("ok")');
+    const studentFolderEntries = await entriesFromFolder(studentFolder);
+    assert.equal(studentFolderEntries[0].relativePath, path.join('20101_가나다', 'code.py'));
     const anonymousStudents = [
       { id: 1, student_num: 20101, name: '가나다' },
       { id: 2, student_num: 20102, name: '라마바' },
     ];
     assert.deepEqual(matchStudentsByPath('8월 11일/20101_가나다__work.txt', anonymousStudents).map(student => student.id), [1]);
+    assert.deepEqual(matchStudentsByPath(studentFolderEntries[0].relativePath, anonymousStudents).map(student => student.id), [1]);
     assert.deepEqual(matchStudentsByPath('8월 11일/20101_다른이름__work.txt', anonymousStudents), []);
     assert.deepEqual(matchStudentsByPath('8월 11일/99999_가나다__work.txt', anonymousStudents), []);
     assert.equal(matchStudentsByPath('20101_가나다.txt', [{ id: 1, student_num: 20101, name: '가나다' }, { id: 3, student_num: 20101, name: '가나다' }]).length, 2);
@@ -159,7 +175,15 @@ async function main() {
     assert.equal(reflectionRecords[0].plus, '쉼표, 포함 1');
     assert.equal(reflectionRecords[1].minus, '줄1\n줄2');
     assert.throws(() => parseActivityReflectionCsv(Buffer.from('잘못된,머리글\n값,값')), /머리글/);
-    assert.throws(() => parseActivityReflectionCsv(Buffer.from('날짜,학습주제,Plus,Minus,Interesting\n2099-02-30,주제,,,,')), /날짜 형식/);
+    const reflectionRecordsWithInvalidDates = parseActivityReflectionCsv(Buffer.from([
+      '날짜,학습주제,Plus,Minus,Interesting',
+      '2099. 9. 1,정상 주제,잘함,,,',
+      '잘못된 날짜,제외할 주제,제외,,,',
+      '2099. 2. 30,존재하지 않는 날짜,제외,,,',
+      '2099. 9. 2,두 번째 정상 주제,,아쉬움,흥미로움',
+    ].join('\n')));
+    assert.deepEqual(reflectionRecordsWithInvalidDates.map(record => record.date), ['2099-09-01', '2099-09-02']);
+    assert.deepEqual(reflectionRecordsWithInvalidDates.map(record => record.topic), ['정상 주제', '두 번째 정상 주제']);
     assert.equal(activityDateFromPath('강의실/2099-09-01 첫 수업/20101_가나다.txt'), '2099-09-01');
     assert.equal(activityDateFromPath('강의실/9월 1일/20101_가나다.txt'), '');
     assert.equal(isReflectionImportPath('강의실/되돌아보기/20101_가나다.csv'), true);

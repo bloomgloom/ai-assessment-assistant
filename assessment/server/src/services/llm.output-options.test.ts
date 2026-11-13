@@ -9,6 +9,12 @@ const settings = {
   outputReasoningEffort: 'medium',
   anthropicOutputOptions: {
     domainManagement: {},
+    activity: {
+      model: 'claude-sonnet-5-5',
+    },
+    activityComprehensive: {
+      model: 'claude-opus-5-5',
+    },
     recordsScoring: {},
     recordsComments: {},
     subjectComprehensive: {
@@ -32,6 +38,8 @@ assert.deepEqual(outputOptionsForTask(settings, 'subjectComprehensive'), {
   thinkingLevel: 'medium',
   reasoningEffort: 'medium',
 });
+assert.equal(outputOptionsForTask(settings, 'activity').model, 'claude-sonnet-5-5');
+assert.equal(outputOptionsForTask(settings, 'activityComprehensive').model, 'claude-opus-5-5');
 const sonnet55Request = buildAnthropicMessageParams('test', {
   ...settings,
   model: 'claude-sonnet-5-5',

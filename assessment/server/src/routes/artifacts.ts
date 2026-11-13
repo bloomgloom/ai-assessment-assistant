@@ -6,7 +6,7 @@ import * as unzipper from 'unzipper';
 import * as cheerio from 'cheerio';
 import { queryOne, queryAll } from '../services/db';
 import { assignmentExecute, assignmentQueryAll, assignmentQueryOne } from '../services/assignmentDb';
-import { assignmentArtifactsForStudent } from '../services/assignmentArtifacts';
+import { assignmentArtifactSummaryForStudent, assignmentArtifactsForStudent } from '../services/assignmentArtifacts';
 import { UPLOADS_DIR, ensureDir, moveFileToTrash, resolveStoredPath, restoreTrashedFile, toStoredPath } from '../services/storage';
 import { decodeUploadFilename } from '../services/filename';
 import { entriesFromImportSource, entryFilename } from '../services/importEntries';
@@ -328,7 +328,7 @@ router.post('/student/:studentId', upload.array('files', 20), async (req: Reques
 
 // ── 도메인별 산출물 조회 ───────────────────────────────────────────────────────
 router.get('/student/:studentId/domain/:domain', async (req: Request, res: Response) => {
-  res.json(await assignmentArtifactsForStudent(req.params.studentId, req.params.domain));
+  res.json(await assignmentArtifactSummaryForStudent(req.params.studentId, req.params.domain));
 });
 
 // ── 일괄 산출물 업로드 (ZIP 또는 폴더) ─────────────────────────────────────────

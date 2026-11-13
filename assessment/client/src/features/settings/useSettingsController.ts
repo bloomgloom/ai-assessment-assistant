@@ -68,7 +68,9 @@ function normalizeAnthropicOutputOptions(value: unknown): AnthropicOutputOptions
     ? value as Partial<Record<AnthropicOutputTask, Partial<AnthropicOutputOptions[AnthropicOutputTask]>>>
     : {};
   return Object.fromEntries(ANTHROPIC_OUTPUT_TASKS.map((task) => {
-    const item = source[task.key] || {};
+    // 기존 버전에서는 활동과 종합이 하나의 설정을 공유했으므로,
+    // 새 종합 설정이 없을 때는 저장된 활동 설정을 승계한다.
+    const item = source[task.key] || (task.key === 'activityComprehensive' ? source.activity : undefined) || {};
     return [task.key, {
       model: String(item.model || ''),
       effort: item.effort ? normalizeAnthropicEffort(item.effort) : '',

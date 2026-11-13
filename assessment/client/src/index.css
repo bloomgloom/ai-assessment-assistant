@@ -82,6 +82,14 @@
   .records-table-row:hover > td {
     @apply bg-blue-50;
   }
+  .records-table-fill-cell {
+    height: 1px;
+  }
+  .records-table-fill-cell > textarea,
+  .records-table-fill-cell > .records-table-fill-content,
+  .records-table-fill-content > textarea {
+    height: 100%;
+  }
   .records-table-column-resize-handle {
     width: 8px;
   }

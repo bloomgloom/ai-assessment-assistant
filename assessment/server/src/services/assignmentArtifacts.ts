@@ -11,11 +11,15 @@ export interface AssignmentArtifact {
   source: 'artifact' | 'assignment';
 }
 
-export async function assignmentArtifactsForStudent(
-  assessmentStudentId: number | string,
-  domain: string
-): Promise<AssignmentArtifact[]> {
-  const student = await queryOne<{
+export type AssignmentSubmissionState = 'accepted' | 'no_file' | null;
+
+export interface AssignmentArtifactSummary {
+  artifacts: AssignmentArtifact[];
+  submissionState: AssignmentSubmissionState;
+}
+
+async function assessmentStudentIdentity(assessmentStudentId: number | string) {
+  return queryOne<{
     class_id: number;
     student_num: number;
     name: string;
@@ -23,6 +27,13 @@ export async function assignmentArtifactsForStudent(
     'SELECT class_id, student_num, name FROM class_students WHERE id=?',
     [assessmentStudentId]
   );
+}
+
+export async function assignmentArtifactsForStudent(
+  assessmentStudentId: number | string,
+  domain: string
+): Promise<AssignmentArtifact[]> {
+  const student = await assessmentStudentIdentity(assessmentStudentId);
   if (!student) return [];
 
   return assignmentQueryAll<AssignmentArtifact>(
@@ -62,4 +73,35 @@ export async function assignmentArtifactsForStudent(
       domain,
     ]
   );
+}
+
+export async function assignmentArtifactSummaryForStudent(
+  assessmentStudentId: number | string,
+  domain: string
+): Promise<AssignmentArtifactSummary> {
+  const artifacts = await assignmentArtifactsForStudent(assessmentStudentId, domain);
+  const student = await assessmentStudentIdentity(assessmentStudentId);
+  if (!student) return { artifacts, submissionState: null };
+
+  const latestSubmission = await assignmentQueryAll<{ status: 'accepted' | 'no_file' }>(
+    `SELECT sub.status
+     FROM assignment_submissions sub
+     JOIN assignment_runs run ON run.id=sub.run_id
+     JOIN assignment_configs cfg ON cfg.id=run.config_id
+     JOIN assignment_classes ac ON ac.id=run.assignment_class_id
+     LEFT JOIN assignment_students ast ON ast.id=sub.assignment_student_id
+     WHERE cfg.domain_name=? AND sub.status IN ('accepted', 'no_file')
+       AND (
+         ast.assessment_student_id=?
+         OR (ac.assessment_class_id=? AND sub.student_num=? AND sub.name=?)
+       )
+     ORDER BY sub.submitted_at DESC, sub.id DESC
+     LIMIT 1`,
+    [domain, assessmentStudentId, student.class_id, student.student_num, student.name]
+  );
+
+  return {
+    artifacts,
+    submissionState: latestSubmission[0]?.status || null,
+  };
 }

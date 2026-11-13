@@ -539,6 +539,7 @@ router.post('/:classId/generate', async (req, res) => {
           const kindPrompt = plan?.kind === '실습' ? subjectSettings.practice_prompt : plan?.kind === '탐구' ? subjectSettings.inquiry_prompt : plan?.kind === '개념' ? subjectSettings.concept_prompt : subjectSettings.other_prompt;
           parts = [subjectSettings.common_prompt || '제출물에 있는 사실만 쓰고 학생 이름과 평가·점수는 쓰지 않는다.', kindPrompt || '', plan?.prompt ? `[차시 추가 요청]\n${plan.prompt}` : '', `[차시]\n${date.lesson_no}차시\n진도: ${date.progress}\n내용: ${plan?.content || ''}`].filter(Boolean);
           const files = await queryAll<any>('SELECT id,filename,filepath,mime_type FROM activity_files WHERE student_id=? AND activity_date_id=? ORDER BY uploaded_at,id', [student.id, activityDateId]);
+          if (!files.length) throw new Error('학생 산출물이 없습니다.');
           const artifacts: ArtifactRow[] = files.map(file => ({ id: file.id, filename: file.filename, filepath: file.filepath, mime_type: file.mime_type }));
           const sourceFiles = String(plan?.source_files || '').split(',').map(value => value.trim()).filter(Boolean);
           for (const [sourceIndex, filename] of sourceFiles.entries()) {
@@ -552,7 +553,7 @@ router.post('/:classId/generate', async (req, res) => {
         const prompt = sanitizeStudentText(parts.join('\n\n---\n\n'), student);
         const output = await callLLM(prompt, llmSettings, controller.signal, undefined, attachments, llmSettings.temperatures.recordsComments, undefined, {
           type: 'object', properties: { summary: { type: 'string' } }, required: ['summary'], additionalProperties: false,
-        }, 'activity');
+        }, mode === 'semester' ? 'activityComprehensive' : 'activity');
         const summary = summaryFromResponse(output);
         if (!summary) throw new Error('활동 기록 생성 결과가 비어 있습니다.');
         completed += 1;
@@ -634,6 +635,7 @@ router.post('/:classId/batch', async (req, res) => {
         const kindPrompt = plan?.kind === '실습' ? subjectSettings.practice_prompt : plan?.kind === '탐구' ? subjectSettings.inquiry_prompt : plan?.kind === '개념' ? subjectSettings.concept_prompt : subjectSettings.other_prompt;
         parts = [subjectSettings.common_prompt || '제출물에 있는 사실만 쓴다. 학생 이름을 쓰지 않는다. 한국어로 쓴다.', kindPrompt || '', plan?.prompt ? `[차시 추가 요청]\n${plan.prompt}` : '', `[차시]\n${date.lesson_no}차시\n진도: ${date.progress}\n내용: ${plan?.content || ''}`].filter(Boolean);
         const files = await queryAll<any>('SELECT id,filename,filepath,mime_type FROM activity_files WHERE student_id=? AND activity_date_id=? ORDER BY uploaded_at,id', [student.id, activityDateId]);
+        if (!files.length) continue;
         fileIds = files.map(file => Number(file.id));
         artifacts = files.map(file => ({ id: file.id, filename: file.filename, filepath: file.filepath, mime_type: file.mime_type }));
         const sourceFiles = String(plan?.source_files || '').split(',').map(value => value.trim()).filter(Boolean);
@@ -651,7 +653,7 @@ router.post('/:classId/batch', async (req, res) => {
       const customId = `activity_${student.id}_${mode}_${activityDateId || 0}_${index}`;
       requests.push({ custom_id: customId, params: buildAnthropicMessageParams(prompt, llmSettings, (target as any)._attachments || [], llmSettings.temperatures.recordsComments, undefined, {
         type: 'object', properties: { summary: { type: 'string' } }, required: ['summary'], additionalProperties: false,
-      }, 'activity') });
+      }, mode === 'semester' ? 'activityComprehensive' : 'activity') });
       requestMeta.push({ customId, studentId: student.id, studentName: student.name, activityDateId, fileIds, mode });
     }
     if (!requests.length) return res.json({ ok: true, batchId: '', status: 'ended', requestCount: 0 });

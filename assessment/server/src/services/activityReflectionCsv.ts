@@ -39,9 +39,9 @@ export function parseActivityReflectionCsv(buffer: Buffer): ActivityReflectionRe
   const required = ['날짜', '학습주제', 'Plus', 'Minus', 'Interesting'];
   const column = (name: string) => headers.indexOf(name);
   if (required.some(name => column(name) < 0)) throw new Error('되돌아보기 CSV 머리글이 올바르지 않습니다.');
-  return rows.map((row, index) => {
+  return rows.flatMap(row => {
     const date = reflectionDate(row[column('날짜')] || '');
-    if (!date) throw new Error(`되돌아보기 CSV ${index + 2}행의 날짜 형식이 올바르지 않습니다.`);
+    if (!date) return [];
     return {
       date,
       topic: row[column('학습주제')] || '',

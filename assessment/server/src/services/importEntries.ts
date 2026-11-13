@@ -29,14 +29,18 @@ export async function entriesFromFolder(folderPath: string): Promise<ImportEntry
   const root = path.resolve(folderPath);
   const stat = fs.statSync(root);
   if (!stat.isDirectory()) throw new Error('선택한 경로가 폴더가 아닙니다.');
+  const rootName = path.basename(root).normalize('NFC');
   const entries: ImportEntry[] = [];
   const walk = (dir: string) => {
     for (const item of fs.readdirSync(dir, { withFileTypes: true })) {
       const absolutePath = path.join(dir, item.name);
-      const relativePath = path.relative(root, absolutePath).normalize('NFC');
-      if (!visiblePath(relativePath)) continue;
+      const pathWithinRoot = path.relative(root, absolutePath).normalize('NFC');
+      if (!visiblePath(pathWithinRoot)) continue;
       if (item.isDirectory()) walk(absolutePath);
-      else if (item.isFile()) entries.push({ relativePath, read: async () => fs.readFileSync(absolutePath) });
+      else if (item.isFile()) {
+        const relativePath = rootName ? path.join(rootName, pathWithinRoot) : pathWithinRoot;
+        entries.push({ relativePath, read: async () => fs.readFileSync(absolutePath) });
+      }
     }
   };
   walk(root);

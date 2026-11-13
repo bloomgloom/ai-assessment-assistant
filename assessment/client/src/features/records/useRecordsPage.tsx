@@ -1738,7 +1738,7 @@ export function useRecordsPage() {
                               const contentKey = `${s.id}_comments_${d.name}`;
                               const dirty = isContentFieldDirty(contentKey, 'text');
                               return (
-                                <td key={`${d.name}_comments`} className="group relative border-r align-top p-1"
+                                <td key={`${d.name}_comments`} className="records-table-fill-cell group relative border-r align-top p-1"
                                   style={{ width: w, minWidth: w }}>
                                   {renderLlmErrorTooltip(domainLlmError)}
                                   <StableTextarea className={`textarea w-full text-sm disabled:bg-blue-50 disabled:text-gray-500 disabled:cursor-not-allowed ${dirtyControlClass(dirty)}`} style={{ minHeight: RECORD_TEXTAREA_MIN_HEIGHT, height: rowTextareaHeight }}
@@ -1763,7 +1763,7 @@ export function useRecordsPage() {
                               const contentKey = `${s.id}_comments_${d.name}`;
                               const dirty = isContentFieldDirty(contentKey, c.itemTitle!);
                               return (
-                                <td key={`${d.name}_${c.id}`} className="group relative border-r align-top p-1"
+                                <td key={`${d.name}_${c.id}`} className="records-table-fill-cell group relative border-r align-top p-1"
                                   style={{ width: w, minWidth: w }}>
                                   {renderLlmErrorTooltip(domainLlmError)}
                                   <StableTextarea className={`textarea w-full text-sm disabled:bg-blue-50 disabled:text-gray-500 disabled:cursor-not-allowed ${dirtyControlClass(dirty)}`} style={{ minHeight: RECORD_TEXTAREA_MIN_HEIGHT, height: rowTextareaHeight }}
@@ -1809,7 +1809,7 @@ export function useRecordsPage() {
                               {activitySummaries[s.id] || ''}
                               {renderCellResizeHandles(s.id, '_activity', 280)}
                             </td>
-                            <td className="group relative align-top p-1 border-r"
+                            <td className="records-table-fill-cell group relative align-top p-1 border-r"
                               style={{ width: compWidth, minWidth: compWidth }}>
                               {renderLlmErrorTooltip(compLlmError)}
                               <StableTextarea className={`textarea w-full text-sm bg-blue-50/20 border-blue-100 disabled:bg-blue-50 disabled:text-gray-500 disabled:cursor-not-allowed ${dirtyControlClass(isContentFieldDirty(`${s.id}_comments_${SUBJECT_COMPREHENSIVE_DOMAIN}`, 'text'))}`} style={{ minHeight: RECORD_TEXTAREA_MIN_HEIGHT, height: rowTextareaHeight }}
@@ -1841,10 +1841,10 @@ export function useRecordsPage() {
                               </button>
                               {renderCellResizeHandles(s.id, '_comp_count', 74)}
                             </td>
-                            <td className="group relative align-top p-1"
+                            <td className="records-table-fill-cell group relative align-top p-1"
                               style={{ width: compSpellWidth, minWidth: compSpellWidth }}>
                               {renderLlmErrorTooltip(compLlmError)}
-                              <div className={`relative rounded-md ${spellcheckLocked ? 'bg-blue-50' : 'bg-blue-50/20'}`}>
+                              <div className={`records-table-fill-content relative rounded-md ${spellcheckLocked ? 'bg-blue-50' : 'bg-blue-50/20'}`}>
                                 {showSpellcheckHighlight && (
                                   <div
                                     ref={element => {

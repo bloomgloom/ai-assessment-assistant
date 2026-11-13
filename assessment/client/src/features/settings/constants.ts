@@ -27,10 +27,11 @@ export const TEMPERATURE_TASKS = [
 
 export const ANTHROPIC_OUTPUT_TASKS = [
   { key: 'domainManagement', label: '평가 영역 관리' },
-  { key: 'activity', label: '활동' },
-  { key: 'recordsScoring', label: '채점' },
-  { key: 'recordsComments', label: '기록' },
-  { key: 'subjectComprehensive', label: '세특' },
+  { key: 'activity', label: '활동 기록 관리 - 활동' },
+  { key: 'activityComprehensive', label: '활동 기록 관리 - 종합' },
+  { key: 'recordsScoring', label: '채점 기록 관리 - 채점' },
+  { key: 'recordsComments', label: '채점 기록 관리 - 기록' },
+  { key: 'subjectComprehensive', label: '채점 기록 관리 - 세특' },
 ] as const;
 
 export const DEFAULT_TEMPERATURES = {

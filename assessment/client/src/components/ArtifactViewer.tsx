@@ -18,6 +18,11 @@ interface Artifact {
   source?: 'artifact' | 'assignment';
 }
 
+interface ArtifactSummary {
+  artifacts: Artifact[];
+  submissionState: 'accepted' | 'no_file' | null;
+}
+
 function isCodeFile(f: string) { return ['js','jsx','ts','tsx','py','c','cpp','h','java','css','sql','json','md','txt'].includes(artifactExtension(f)); }
 
 function sortArtifacts(a: Artifact, b: Artifact) {
@@ -33,12 +38,15 @@ interface ArtifactViewerProps {
 
 export default function ArtifactViewer({ studentId, domain }: ArtifactViewerProps) {
   const [artifacts, setArtifacts] = useState<Artifact[]>([]);
+  const [submissionState, setSubmissionState] = useState<ArtifactSummary['submissionState']>(null);
   const [viewing, setViewing] = useState<Artifact | null>(null);
   const [uploading, setUploading] = useState(false);
 
   const loadArtifacts = async () => {
     const r = await artifactsApi.getByDomain(studentId, domain);
-    setArtifacts([...r.data].sort(sortArtifacts));
+    const summary = r.data as ArtifactSummary;
+    setArtifacts([...summary.artifacts].sort(sortArtifacts));
+    setSubmissionState(summary.submissionState);
   };
 
   useEffect(() => { loadArtifacts(); }, [studentId, domain]);
@@ -83,7 +91,13 @@ export default function ArtifactViewer({ studentId, domain }: ArtifactViewerProp
             <X size={8} />
           </button>
         </div>
-      )}/>
+      )}>
+        {submissionState === 'no_file' && (
+          <span className="whitespace-nowrap rounded border border-gray-300 bg-gray-100 px-2 py-0.5 text-[11px] font-semibold text-gray-600">
+            미제출
+          </span>
+        )}
+      </CompactArtifactCell>
 
       <Suspense fallback={null}>
         <ArtifactPreviewModal artifact={viewing} onClose={() => setViewing(null)} />

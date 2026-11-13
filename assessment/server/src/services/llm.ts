@@ -47,7 +47,7 @@ export interface AiTemperatures {
 }
 
 export type AnthropicEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
-export type AnthropicOutputTask = 'domainManagement' | 'activity' | 'recordsScoring' | 'recordsComments' | 'subjectComprehensive';
+export type AnthropicOutputTask = 'domainManagement' | 'activity' | 'activityComprehensive' | 'recordsScoring' | 'recordsComments' | 'subjectComprehensive';
 export type GeminiThinkingLevel = 'low' | 'medium' | 'high';
 export type OpenAIReasoningEffort = 'low' | 'medium' | 'high';
 export interface AnthropicOutputOption {
@@ -60,7 +60,7 @@ export interface AnthropicOutputOption {
 export type AnthropicOutputOptions = Record<AnthropicOutputTask, AnthropicOutputOption>;
 
 const ANTHROPIC_EFFORTS = new Set<AnthropicEffort>(['low', 'medium', 'high', 'xhigh', 'max']);
-const ANTHROPIC_OUTPUT_TASKS: AnthropicOutputTask[] = ['domainManagement', 'activity', 'recordsScoring', 'recordsComments', 'subjectComprehensive'];
+const ANTHROPIC_OUTPUT_TASKS: AnthropicOutputTask[] = ['domainManagement', 'activity', 'activityComprehensive', 'recordsScoring', 'recordsComments', 'subjectComprehensive'];
 
 function providerTemperatureMax(provider: string) {
   return provider === 'anthropic' ? 1 : 2;
@@ -95,11 +95,15 @@ function readAnthropicOutputOptions(map: Record<string, string>, provider: strin
     return Object.fromEntries(ANTHROPIC_OUTPUT_TASKS.map((task) => [task, {}])) as AnthropicOutputOptions;
   }
   return Object.fromEntries(ANTHROPIC_OUTPUT_TASKS.map((task) => {
-    const model = aliases.map((alias) => map[`llm_model_${alias}_${task}`]).find((value) => value !== undefined);
-    const effort = aliases.map((alias) => map[`llm_anthropic_effort_${alias}_${task}`]).find((value) => value !== undefined);
-    const maxTokens = aliases.map((alias) => map[`llm_anthropic_max_tokens_${alias}_${task}`]).find((value) => value !== undefined);
-    const thinkingLevel = aliases.map((alias) => map[`llm_output_thinking_level_${alias}_${task}`]).find((value) => value !== undefined);
-    const reasoningEffort = aliases.map((alias) => map[`llm_output_reasoning_effort_${alias}_${task}`]).find((value) => value !== undefined);
+    const taskAliases: AnthropicOutputTask[] = task === 'activityComprehensive' ? [task, 'activity'] : [task];
+    const readTaskValue = (prefix: string) => taskAliases
+      .flatMap((taskAlias) => aliases.map((alias) => map[`${prefix}_${alias}_${taskAlias}`]))
+      .find((value) => value !== undefined);
+    const model = readTaskValue('llm_model');
+    const effort = readTaskValue('llm_anthropic_effort');
+    const maxTokens = readTaskValue('llm_anthropic_max_tokens');
+    const thinkingLevel = readTaskValue('llm_output_thinking_level');
+    const reasoningEffort = readTaskValue('llm_output_reasoning_effort');
     return [task, {
       ...(model ? { model } : {}),
       ...(effort ? { effort: sanitizeAnthropicEffort(effort) } : {}),

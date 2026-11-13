@@ -48,6 +48,7 @@ export function CompactArtifactBadge({ file, onClick, title }: { file: CompactAr
 
 export function CompactArtifactCell<TFile extends CompactArtifactFile>({
   files,
+  children,
   renderFile,
   fileKey,
   onPreview,
@@ -56,6 +57,7 @@ export function CompactArtifactCell<TFile extends CompactArtifactFile>({
   pending = false,
 }: {
   files: TFile[];
+  children?: ReactNode;
   renderFile?: (file: TFile) => ReactNode;
   fileKey?: (file: TFile) => string | number;
   onPreview?: (file: TFile) => void;
@@ -70,6 +72,7 @@ export function CompactArtifactCell<TFile extends CompactArtifactFile>({
 
   return <div className={`flex min-h-8 flex-wrap items-center justify-center gap-1.5 rounded ${pending ? 'bg-amber-50' : ''}`}>
     {files.map(file => <div key={fileKey ? fileKey(file) : file.id}>{renderFile ? renderFile(file) : <CompactArtifactBadge file={file} onClick={onPreview ? () => onPreview(file) : undefined}/>}</div>)}
+    {children}
     {onUpload && (hasDesktopFileDialogs() ? <button
       type="button"
       className={`flex h-6 w-6 items-center justify-center rounded border border-dashed ${uploading ? 'border-gray-300 text-gray-300' : 'border-blue-300 text-blue-500 hover:bg-blue-50'}`}

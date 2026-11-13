@@ -37,6 +37,7 @@ const classAndSeat = (studentNum: number) => ({ classNum: Math.floor((studentNum
 export default function ActivityPage() {
   const [classes, setClasses] = useState<ClassItem[]>([]);
   const [classId, setClassId] = useState(0);
+  const activeClassIdRef = useRef(0);
   const [dates, setDates] = useState<ActivityDate[]>([]);
   const [savedDates, setSavedDates] = useState<ActivityDate[]>([]);
   const [selectedDate, setSelectedDate] = useState('all');
@@ -87,6 +88,7 @@ export default function ActivityPage() {
   const loadSettings = async (item = selectedClass) => {
     if (!item) return;
     const { data } = await lessonPlansApi.getPlans(scopeOf(item));
+    if (activeClassIdRef.current !== item.id) return;
     setSettings(data.settings);
     setPlanRows((data.rows || []) as PlanRow[]);
   };
@@ -94,6 +96,7 @@ export default function ActivityPage() {
     if (!targetClassId) return [] as ActivityDate[];
     const { data } = await activityApi.getDates(targetClassId);
     const rows = data as ActivityDate[];
+    if (activeClassIdRef.current !== targetClassId) return rows;
     setDates(rows);
     setSavedDates(rows);
     setSelectedDate(current => current === 'all' || rows.some(row => row.activity_date === current) ? current : 'all');
@@ -107,17 +110,19 @@ export default function ActivityPage() {
       ...student, summary: '', saved_summary: '', is_absent: 0, observation: '', topic: '',
       plus_text: '', minus_text: '', interesting_text: '', semester_summary: summaryMap[student.id] || '', files: [],
     }));
+    if (activeClassIdRef.current !== targetClassId) return rows;
     setSavedSemesterSummaries(summaryMap);
     setRosterStudents(rows);
     return rows;
   };
-  const loadTables = async (targetDates = dates, targetDate = selectedDate) => {
-    if (!classId) return;
+  const loadTables = async (targetDates = dates, targetDate = selectedDate, targetClassId = classId) => {
+    if (!targetClassId) return;
     const draftKeys = new Set(targetDates.filter(row => row.id < 0).map(row => String(row.id)));
     const actualDates = targetDates.filter(row => row.id > 0);
     const wanted = targetDate === 'all' ? actualDates : actualDates.filter(row => row.activity_date === targetDate);
-    const responses = await Promise.all(wanted.map(row => activityApi.getTable(classId, row.activity_date)));
+    const responses = await Promise.all(wanted.map(row => activityApi.getTable(targetClassId, row.activity_date)));
     const next: Record<string, StudentRow[]> = Object.fromEntries(responses.map(response => [String(response.data.date.id), response.data.students as StudentRow[]]));
+    if (activeClassIdRef.current !== targetClassId) return;
     setTables(current => ({ ...Object.fromEntries(Object.entries(current).filter(([key]) => draftKeys.has(key))), ...next }));
     setSavedTables(structuredClone(next));
     setSelectedStudentIds(new Set(Object.values(next).flat().filter(student => student.files?.some(file => !file.summarized_at)).map(student => student.id)));
@@ -138,7 +143,10 @@ export default function ActivityPage() {
     void loadLinkedSubjects();
     classesApi.getAll().then(({ data }) => {
       setClasses(data);
-      if (data[0]) setClassId(data[0].id);
+      if (data[0]) {
+        activeClassIdRef.current = data[0].id;
+        setClassId(data[0].id);
+      }
     });
   }, []);
   useEffect(() => {
@@ -428,8 +436,11 @@ export default function ActivityPage() {
     const targetSet = new Set(targetStudentIds);
     const requests: ActivityGenerationRequest[] = [];
     if (views.has('activity')) {
+      const selectedDateRows = selectedDateRow ? (tables[String(selectedDateRow.id)] || []) : [];
       const targets = selectedDateRow
-        ? targetStudentIds.map(studentId => ({ studentId, activityDateId: selectedDateRow.id }))
+        ? targetStudentIds
+          .filter(studentId => selectedDateRows.some(row => row.id === studentId && (row.files?.length || 0) > 0))
+          .map(studentId => ({ studentId, activityDateId: selectedDateRow.id }))
         : Object.entries(tables).flatMap(([dateId, rows]) => rows
           .filter(row => targetSet.has(row.id) && !row.manually_edited && row.files?.some(file => !file.summarized_at))
           .map(row => ({ studentId: row.id, activityDateId: Number(dateId) })));
@@ -477,6 +488,7 @@ export default function ActivityPage() {
     if (nextClassId === classId) return;
     if (!canDiscardChanges()) return;
     discardChanges();
+    activeClassIdRef.current = nextClassId;
     setClassId(nextClassId);
   };
   const selectDate = (nextDate: string) => {
@@ -579,13 +591,13 @@ export default function ActivityPage() {
       const tableKey = String(date.id);
       const savedRow = savedTables[tableKey]?.find(item => item.id === row.id);
       if (column.kind === 'files') content = <CompactArtifactCell files={row.files || []} pending={pendingFiles} uploading={uploadingCell === `${student.id}:${date.id}`} onPreview={file => setPreviewArtifact({ id: file.id, filename: file.filename, source: 'activity' })} onUpload={files => uploadStudentFiles(student, date, files)}/>;
-      if (column.kind === 'activity') content = <div className="group/llm-error relative"><StableTextarea className={`textarea w-full disabled:cursor-not-allowed disabled:bg-gray-100 disabled:text-gray-500 ${activityError ? 'border-rose-300 bg-rose-50' : row.summary !== savedRow?.summary ? 'border-amber-300 bg-amber-50' : ''}`} style={{ minHeight: 80, height: rowTextareaHeight }} disabled={activityCellLocked} title={activityCellLocked ? 'AI 생성 진행 중이라 수정할 수 없습니다.' : undefined} value={row.summary || ''} onChange={event => updateActivitySummary(row.id, date.id, event.target.value)}/>{activityError && <div className="pointer-events-none absolute left-1/2 top-full z-50 mt-2 hidden w-80 -translate-x-1/2 rounded-md border border-rose-200 bg-rose-50 p-3 text-left text-xs text-rose-950 shadow-lg group-hover/llm-error:block group-focus-within/llm-error:block"><div className="mb-1 font-semibold text-rose-700">LLM 오류</div><div className="whitespace-pre-wrap">{activityError.error}</div>{activityError.result && <div className="mt-2 whitespace-pre-wrap border-t border-rose-200 pt-2 text-rose-800">{activityError.result}</div>}</div>}</div>;
+      if (column.kind === 'activity') content = <div className="records-table-fill-content group/llm-error relative"><StableTextarea className={`textarea w-full disabled:cursor-not-allowed disabled:bg-gray-100 disabled:text-gray-500 ${activityError ? 'border-rose-300 bg-rose-50' : row.summary !== savedRow?.summary ? 'border-amber-300 bg-amber-50' : ''}`} style={{ minHeight: 80, height: rowTextareaHeight }} disabled={activityCellLocked} title={activityCellLocked ? 'AI 생성 진행 중이라 수정할 수 없습니다.' : undefined} value={row.summary || ''} onChange={event => updateActivitySummary(row.id, date.id, event.target.value)}/>{activityError && <div className="pointer-events-none absolute left-1/2 top-full z-50 mt-2 hidden w-80 -translate-x-1/2 rounded-md border border-rose-200 bg-rose-50 p-3 text-left text-xs text-rose-950 shadow-lg group-hover/llm-error:block group-focus-within/llm-error:block"><div className="mb-1 font-semibold text-rose-700">LLM 오류</div><div className="whitespace-pre-wrap">{activityError.error}</div>{activityError.result && <div className="mt-2 whitespace-pre-wrap border-t border-rose-200 pt-2 text-rose-800">{activityError.result}</div>}</div>}</div>;
       if (column.kind === 'absent') content = <input type="checkbox" checked={!!row.is_absent} disabled={excelMode} onChange={event => setTables(current => ({ ...current, [tableKey]: current[tableKey].map(item => item.id === row.id ? { ...item, is_absent: event.target.checked ? 1 : 0 } : item) }))}/>;
       if (column.kind === 'observation') content = excelMode ? <span className="whitespace-pre-wrap">{row.observation || '-'}</span> : <StableTextarea className={`textarea w-full disabled:bg-gray-100 disabled:text-gray-400 ${row.observation !== savedRow?.observation ? 'border-amber-300 bg-amber-50' : ''}`} style={{ minHeight: 80, height: rowTextareaHeight }} disabled={!!row.is_absent} value={row.observation || ''} onChange={event => setTables(current => ({ ...current, [tableKey]: current[tableKey].map(item => item.id === row.id ? { ...item, observation: event.target.value } : item) }))}/>;
       if (column.kind === 'reflection') content = row.plus_text || row.minus_text || row.interesting_text
         ? <div className="whitespace-pre-wrap text-xs leading-5"><div><span className="font-medium text-gray-600">Plus:</span> {row.plus_text}</div><div><span className="font-medium text-gray-600">Minus:</span> {row.minus_text}</div><div><span className="font-medium text-gray-600">Interesting:</span> {row.interesting_text}</div></div>
         : <span className="text-gray-300">-</span>;
-      return <td key={column.key} className={`relative border-r px-2 py-2 align-top ${column.kind === 'absent' ? 'text-center' : ''} ${column.kind === 'files' && pendingFiles ? 'border-amber-300 bg-amber-50' : ''}`} style={{ width, minWidth: width }}>{content}{renderCellResizeHandles(student.id, column.key, column.width)}</td>;
+      return <td key={column.key} className={`relative border-r px-2 py-2 align-top ${column.kind === 'activity' || column.kind === 'observation' ? 'records-table-fill-cell' : ''} ${column.kind === 'absent' ? 'text-center' : ''} ${column.kind === 'files' && pendingFiles ? 'border-amber-300 bg-amber-50' : ''}`} style={{ width, minWidth: width }}>{content}{renderCellResizeHandles(student.id, column.key, column.width)}</td>;
     })}</>;
   };
   const comprehensiveCell = (student: StudentRow) => {
@@ -593,8 +605,8 @@ export default function ActivityPage() {
     const locked = isAiCellLocked(classId, student.id, 'activity', '__ACTIVITY_SEMESTER__');
     const error = llmErrors[key];
     const height = rowHeights[String(student.id)];
-    return <td className="relative border-r p-1 align-top" style={{ width: comprehensiveWidth, minWidth: comprehensiveWidth }}>
-      <div className="group/llm-error relative">
+    return <td className="records-table-fill-cell relative border-r p-1 align-top" style={{ width: comprehensiveWidth, minWidth: comprehensiveWidth }}>
+      <div className="records-table-fill-content group/llm-error relative">
         <StableTextarea
           className={`textarea w-full text-sm disabled:cursor-not-allowed disabled:bg-gray-100 disabled:text-gray-500 ${error ? 'border-rose-300 bg-rose-50' : currentSemesterSummaries[student.id] !== (savedSemesterSummaries[student.id] || '') ? 'border-amber-300 bg-amber-50' : ''}`}
           style={{ minHeight: 80, height }}
