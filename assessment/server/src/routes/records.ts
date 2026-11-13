@@ -5,7 +5,7 @@ import fs from 'fs';
 import ExcelJS from 'exceljs';
 import { queryAll, queryOne, execute, transaction } from '../services/db';
 import { UPLOADS_DIR, ensureDir, resolveStoredPath } from '../services/storage';
-import { fitWrappedRowHeights, parseScoringExcel, parseStudentExcel, exportToExcel, writeScoringToExcel, writeCommentsToExcel } from '../services/excel';
+import { parseScoringExcel, parseStudentExcel, exportToExcel, writeScoringToExcel, writeCommentsToExcel } from '../services/excel';
 import { decodeUploadFilename } from '../services/filename';
 
 const UPLOAD_DIR = path.join(UPLOADS_DIR, 'records');
@@ -289,7 +289,6 @@ router.get('/export-full/:classId', async (req: Request, res: Response) => {
     });
     sheet.views = [{ state: 'frozen', ySplit: 1 }];
   }
-  fitWrappedRowHeights(contentSheet, { startRow: 2 });
 
   const buffer = Buffer.from(await wb.xlsx.writeBuffer());
   const filename = `전체기록_${cls.year}_${cls.semester}_${cls.grade}_${cls.subject}_${cls.room}.xlsx`;
