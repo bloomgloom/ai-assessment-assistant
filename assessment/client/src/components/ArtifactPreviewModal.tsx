@@ -89,6 +89,7 @@ export default function ArtifactPreviewModal({ artifact, onClose }: ArtifactPrev
               href={artifactPreviewUrl(artifact)}
               target="_blank"
               rel="noopener noreferrer"
+              onClick={onClose}
               className="btn-secondary inline-flex items-center gap-1 py-1 text-xs"
             >
               <Eye size={13} /> 새 탭
