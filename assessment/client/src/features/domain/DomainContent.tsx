@@ -1,4 +1,4 @@
-import { Dispatch, DragEvent, lazy, ReactNode, RefObject, SetStateAction, Suspense, useEffect, useState } from 'react';
+import { Dispatch, DragEvent, ReactNode, RefObject, SetStateAction, useEffect, useState } from 'react';
 import MarkdownIt from 'markdown-it';
 import { AlertCircle, ClipboardCheck, Download, Edit3, ExternalLink, Eye, FileText, Link2, Loader2, Plus, RefreshCw, Save, Trash2, Upload, X } from 'lucide-react';
 import { AiGenerateBox } from '../../components/common/AiGenerateBox';
@@ -6,12 +6,11 @@ import { CriteriaItemCard } from '../../components/common/CriteriaItemCard';
 import { StableTextarea } from '../../components/common/StableTextarea';
 import { assignmentConfigsApi } from '../../lib/api';
 import { downloadUrl, filesToInputChangeEvent, hasDesktopFileDialogs, openFiles, saveBlob } from '../../lib/desktopFiles';
+import { openArtifactPreview } from '../../lib/artifactPreview';
 import { CriteriaEditorPanel as DomainCriteriaPanel, CriteriaEditorPromptView as DomainCriteriaPromptView, CriteriaEditorSplit as DomainCriteriaSplit } from '../../components/common/CriteriaEditorPanel';
 import LessonPlansPage, { LessonTab } from '../../pages/LessonPlansPage';
 import { AiChatMessage, AssignmentClassSnapshot, AssignmentConfig, AssignmentResource, AssignmentRunDetail, AssignmentRunStudent, AssignmentRunSubmission, AssignmentRunSummary, EvalItem, CommentsItem, StandardRef, SubjectDomainRow, SubjectItem } from './types';
 import { DomainTab } from './constants';
-
-const ArtifactPreviewModal = lazy(() => import('../../components/ArtifactPreviewModal'));
 
 interface DomainContentProps {
   selectedSubject: SubjectItem | null;
@@ -338,7 +337,6 @@ export function DomainContent({
   const [guideOriginal, setGuideOriginal] = useState('');
   const [contentDraft, setContentDraft] = useState('');
   const [extensionDraft, setExtensionDraft] = useState('');
-  const [viewingResource, setViewingResource] = useState<AssignmentResource | null>(null);
   const [resourceLinkDraft, setResourceLinkDraft] = useState('');
   const [guideLinkDraft, setGuideLinkDraft] = useState('');
   const [assignmentHistory, setAssignmentHistory] = useState<AssignmentRunSummary[]>([]);
@@ -1105,7 +1103,7 @@ export function DomainContent({
                         <div className="flex gap-1">
                           <button
                             className="inline-flex h-7 w-7 items-center justify-center rounded border border-gray-200 bg-white text-gray-600 hover:bg-gray-50"
-                            onClick={() => setViewingResource(resource)}
+                            onClick={() => openArtifactPreview({ id: resource.id, filename: resource.filename, source: 'resource' })}
                             title="미리보기"
                           >
                             <Eye size={13} />
@@ -1150,15 +1148,6 @@ export function DomainContent({
                   )}
                 </div>
               </div>
-
-              <Suspense fallback={null}>
-                <ArtifactPreviewModal
-                  artifact={viewingResource
-                    ? { id: viewingResource.id, filename: viewingResource.filename, source: 'resource' }
-                    : null}
-                  onClose={() => setViewingResource(null)}
-                />
-              </Suspense>
 
               <div className="rounded-lg border border-gray-200 bg-white p-4">
                 <h3 className="mb-3 text-sm font-semibold text-gray-800">제출 파일 설정</h3>

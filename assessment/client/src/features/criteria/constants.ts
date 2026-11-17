@@ -1,4 +1,5 @@
 export const CRITERIA_SELECTION_KEY = 'criteriaPage_lastSelection';
+export const CRITERIA_TREE_OPEN_STATES_KEY = 'criteriaPage_treeOpenStates';
 export const CRITERIA_GUIDE_KEY = 'hideCriteriaGuide.v2';
 export const CRITERIA_SOURCE_TYPE = 'standards';
 

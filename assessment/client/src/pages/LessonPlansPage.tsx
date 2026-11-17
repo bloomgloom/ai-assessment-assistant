@@ -38,6 +38,8 @@ const emptySettings: PlanSettings = {
   record_chat: '[]', comprehensive_chat: '[]',
 };
 const treePrefixes = { year: 'lpy', semester: 'lps', grade: 'lpg', subject: 'lpsub', domain: 'unused' } as const;
+const LESSON_PLANS_SELECTION_KEY = 'lessonPlansPage_lastSelection';
+const LESSON_PLANS_TREE_OPEN_STATES_KEY = 'lessonPlansPage_treeOpenStates';
 const categoryFields = [
   ['실습', 'practice_prompt'], ['탐구', 'inquiry_prompt'], ['개념', 'concept_prompt'], ['기타', 'other_prompt'],
 ] as const;
@@ -127,12 +129,27 @@ export default function LessonPlansPage({ embeddedSubject, embeddedTab }: Lesson
     const { data } = await lessonPlansApi.getSubjects();
     const next = data as LessonSubject[];
     setSubjects(next);
-    setSelected(current => current ? (next.find(item => sameScope(current, item)) || next[0] || null) : (next[0] || null));
+    setSelected(current => {
+      if (current) return next.find(item => sameScope(current, item)) || next[0] || null;
+      if (!embedded) {
+        try {
+          const stored = JSON.parse(localStorage.getItem(LESSON_PLANS_SELECTION_KEY) || 'null') as AcademicSubjectScope | null;
+          const restored = stored && next.find(item => sameScope(stored, item));
+          if (restored) return restored;
+        } catch {}
+      }
+      return next[0] || null;
+    });
   };
   useEffect(() => { if (!embedded) void reloadSubjects(); }, [embedded]);
   useEffect(() => {
     if (embeddedSubject) setSelected({ ...embeddedSubject, has_source: Number(embeddedSubject.has_lesson_source || 0) });
   }, [embeddedSubject?.year, embeddedSubject?.semester, embeddedSubject?.grade, embeddedSubject?.subject, embeddedSubject?.has_lesson_source]);
+  useEffect(() => {
+    if (!embedded && selected) {
+      localStorage.setItem(LESSON_PLANS_SELECTION_KEY, JSON.stringify(selected));
+    }
+  }, [embedded, selected]);
 
   const load = async (scope: AcademicSubjectScope) => {
     try {
@@ -170,9 +187,13 @@ export default function LessonPlansPage({ embeddedSubject, embeddedTab }: Lesson
 
   const subjectTree = useAcademicTreeController<LessonSubject>({
     tree,
+    openStateStorageKey: LESSON_PLANS_TREE_OPEN_STATES_KEY,
     selected: node => node.kind === 'subject' && !!node.subject && sameScope(selected, node.subject),
     clickable: node => node.kind === 'subject' && !!node.subject,
-    onSelect: node => { if (node.subject && canDiscardChanges()) setSelected(node.subject); },
+    onSelect: node => {
+      if (!node.subject || !canDiscardChanges()) return;
+      setSelected(node.subject);
+    },
     canAdd: () => false,
     actions: node => node.kind === 'subject' && node.subject ? [{
       title: node.subject.has_source ? '수업 일지 엑셀 연결 관리' : '수업 일지 엑셀 연결', icon: 'link', variant: node.subject.has_source ? 'blue' : 'neutral', visible: 'hover',

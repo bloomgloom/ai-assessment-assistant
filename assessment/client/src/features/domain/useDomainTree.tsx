@@ -10,6 +10,7 @@ import { saveBlob } from '../../lib/desktopFiles';
 import { openLessonJournalLinkDialog } from '../../components/common/LessonJournalLink';
 import {
   DOMAIN_SOURCE_TYPE,
+  DOMAIN_TREE_OPEN_STATES_KEY,
   DOMAIN_TREE_KEY_PREFIXES,
   DOMAIN_TREE_TEXT,
 } from './constants';
@@ -86,6 +87,7 @@ export function useDomainTree({
 
   return useAcademicTreeController<SubjectItem>({
     tree,
+    openStateStorageKey: DOMAIN_TREE_OPEN_STATES_KEY,
     draftKeyPrefix: 'domain-draft',
     selected: (item) => {
       if (!item.subject) return false;

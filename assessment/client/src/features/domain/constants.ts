@@ -1,4 +1,5 @@
 export const DOMAIN_SELECTION_KEY = 'domainPage_lastSelection';
+export const DOMAIN_TREE_OPEN_STATES_KEY = 'domainPage_treeOpenStates';
 export const DOMAIN_GUIDE_KEY = 'hideDomainGuide.v2';
 export const SUBJECT_COMPREHENSIVE_DOMAIN = '__SUBJECT_COMPREHENSIVE__';
 export const DOMAIN_SOURCE_TYPE = 'domains';

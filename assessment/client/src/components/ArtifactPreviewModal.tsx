@@ -2,6 +2,7 @@ import { Suspense, lazy, useEffect, useMemo, useState } from 'react';
 import { useParams, useSearchParams } from 'react-router-dom';
 import { Download, Eye, Loader2, X } from 'lucide-react';
 import { downloadUrl } from '../lib/desktopFiles';
+import { artifactPreviewUrl } from '../lib/artifactPreview';
 import { artifactFileUrl, PreviewArtifact } from './ArtifactPreviewContent';
 
 const ArtifactPreviewContent = lazy(() => import('./ArtifactPreviewContent'));
@@ -10,12 +11,6 @@ const CODE_EXTS = new Set(['js', 'jsx', 'ts', 'tsx', 'py', 'c', 'cpp', 'h', 'jav
 
 function isCodeFile(filename: string) {
   return CODE_EXTS.has(filename.split('.').pop()?.toLowerCase() || '');
-}
-
-export function artifactPreviewUrl(artifact: PreviewArtifact) {
-  const source = artifact.source || 'artifact';
-  const query = new URLSearchParams({ filename: artifact.filename });
-  return `/file-preview/${source}/${artifact.id}?${query.toString()}`;
 }
 
 interface ArtifactPreviewModalProps {

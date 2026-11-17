@@ -1,6 +1,10 @@
 export const RECORDS_GUIDE_KEY = 'hideRecordsGuide.v2';
 export const RECORDS_TREE_COLLAPSED_KEY = 'recordsTreeCollapsed';
+export const RECORDS_TREE_OPEN_STATES_KEY = 'recordsTreeOpenStates';
 export const RECORDS_LAST_CLASS_KEY = 'recordsPage_lastClassId';
+export const ACTIVITY_TREE_COLLAPSED_KEY = 'activityTreeCollapsed';
+export const ACTIVITY_TREE_OPEN_STATES_KEY = 'activityTreeOpenStates';
+export const ACTIVITY_LAST_CLASS_KEY = 'activityPage_lastClassId';
 export const RECORDS_VIEW_PREFS_PREFIX = 'recordsPage_viewPrefs';
 export const SUBJECT_COMPREHENSIVE_DOMAIN = '__SUBJECT_COMPREHENSIVE__';
 

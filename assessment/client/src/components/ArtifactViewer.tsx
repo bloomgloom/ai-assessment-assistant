@@ -2,10 +2,10 @@ import { lazy, Suspense, useState, useEffect } from 'react';
 import { useParams } from 'react-router-dom';
 import { artifactsApi, assignmentConfigsApi } from '../lib/api';
 import { downloadUrl } from '../lib/desktopFiles';
+import { openArtifactPreview } from '../lib/artifactPreview';
 import { X, Loader2, Download } from 'lucide-react';
 import { artifactExtension, CompactArtifactBadge, CompactArtifactCell } from './common/CompactArtifactCell';
 
-const ArtifactPreviewModal = lazy(() => import('./ArtifactPreviewModal'));
 const ArtifactPreviewContent = lazy(() => import('./ArtifactPreviewContent'));
 
 interface Artifact {
@@ -39,7 +39,6 @@ interface ArtifactViewerProps {
 export default function ArtifactViewer({ studentId, domain }: ArtifactViewerProps) {
   const [artifacts, setArtifacts] = useState<Artifact[]>([]);
   const [submissionState, setSubmissionState] = useState<ArtifactSummary['submissionState']>(null);
-  const [viewing, setViewing] = useState<Artifact | null>(null);
   const [uploading, setUploading] = useState(false);
 
   const loadArtifacts = async () => {
@@ -72,7 +71,6 @@ export default function ArtifactViewer({ studentId, domain }: ArtifactViewerProp
     try {
       if (artifact.source === 'assignment') await assignmentConfigsApi.deleteSubmission(artifact.id);
       else await artifactsApi.delete(artifact.id);
-      if (viewing?.id === artifact.id && viewing?.source === artifact.source) setViewing(null);
       await loadArtifacts();
     } catch (error: any) {
       alert(`파일 삭제 실패: ${error?.response?.data?.error || error.message || String(error)}`);
@@ -83,7 +81,7 @@ export default function ArtifactViewer({ studentId, domain }: ArtifactViewerProp
     <>
       <CompactArtifactCell files={artifacts} fileKey={a => `${a.source || 'artifact'}:${a.id}`} uploading={uploading} onUpload={handleUpload} renderFile={a => (
         <div key={`${a.source || 'artifact'}:${a.id}`} className="relative group">
-          <CompactArtifactBadge file={a} onClick={() => setViewing(a)} title={a.filepath ? `${a.filename}\n저장 위치: ${a.filepath}` : a.filename}/>
+          <CompactArtifactBadge file={a} onClick={() => openArtifactPreview(a)} title={a.filepath ? `${a.filename}\n저장 위치: ${a.filepath}` : a.filename}/>
           <button
             className="absolute -top-1.5 -right-1.5 hidden group-hover:flex items-center justify-center w-3.5 h-3.5 rounded-full bg-red-500 text-white"
             onClick={() => handleDelete(a)}
@@ -98,10 +96,6 @@ export default function ArtifactViewer({ studentId, domain }: ArtifactViewerProp
           </span>
         )}
       </CompactArtifactCell>
-
-      <Suspense fallback={null}>
-        <ArtifactPreviewModal artifact={viewing} onClose={() => setViewing(null)} />
-      </Suspense>
     </>
   );
 }

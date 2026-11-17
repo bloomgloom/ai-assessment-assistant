@@ -2,7 +2,11 @@ import { useEffect, useState } from 'react';
 import CodeMirror from '@uiw/react-codemirror';
 import { oneDark } from '@codemirror/theme-one-dark';
 import { python } from '@codemirror/lang-python';
+import DOMPurify from 'dompurify';
 import { AlertTriangle, Loader2, Play } from 'lucide-react';
+import MarkdownIt from 'markdown-it';
+
+const markdownRenderer = new MarkdownIt({ html: true, linkify: true, breaks: true, typographer: false });
 
 interface NotebookCell {
   cell_type?: string;
@@ -84,14 +88,16 @@ function renderOutput(output: NotebookOutput, index: number) {
 }
 
 function renderMarkdown(source: string) {
-  return source.split('\n').map((line, idx) => {
-    const heading = line.match(/^(#{1,6})\s+(.*)$/);
-    if (heading) {
-      const size = heading[1].length <= 2 ? 'text-base' : 'text-sm';
-      return <div key={idx} className={`${size} font-semibold text-gray-900`}>{heading[2]}</div>;
-    }
-    return <div key={idx} className="min-h-[1.25rem] whitespace-pre-wrap text-sm leading-6 text-gray-800">{line}</div>;
+  const html = DOMPurify.sanitize(markdownRenderer.render(source), {
+    FORBID_TAGS: ['script', 'style', 'iframe', 'object', 'embed', 'form', 'input', 'button', 'textarea', 'select', 'meta', 'link'],
+    FORBID_ATTR: ['style'],
   });
+  return (
+    <div
+      className="prose-preview max-w-none text-sm leading-relaxed text-gray-800"
+      dangerouslySetInnerHTML={{ __html: html }}
+    />
+  );
 }
 
 export default function IpynbArtifactPreview({ fileUrl }: { fileUrl: string }) {

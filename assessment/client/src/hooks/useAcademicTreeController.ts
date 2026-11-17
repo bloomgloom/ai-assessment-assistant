@@ -9,6 +9,7 @@ import {
   removeAcademicDraftSubtree,
 } from '../components/common/academicTree';
 import { TreeEditingItem } from '../components/common/TreeNodeView';
+import { usePersistentTreeOpenStates } from './usePersistentTreeOpenStates';
 
 type EditingTreeItem = TreeEditingItem & { mode: 'add' | 'edit' };
 
@@ -37,6 +38,7 @@ type AcademicTreeCommitMode = 'add' | 'edit';
 
 interface UseAcademicTreeControllerOptions<TSubject> {
   tree: AcademicTreeNode<TSubject>[];
+  openStateStorageKey: string;
   draftKeyPrefix?: string;
   selected?: (node: AcademicTreeNode<TSubject>) => boolean;
   clickable?: (node: AcademicTreeNode<TSubject>) => boolean;
@@ -58,6 +60,7 @@ interface UseAcademicTreeControllerOptions<TSubject> {
 
 export function useAcademicTreeController<TSubject>({
   tree,
+  openStateStorageKey,
   draftKeyPrefix = 'draft',
   selected,
   clickable,
@@ -80,6 +83,7 @@ export function useAcademicTreeController<TSubject>({
   const [editing, setEditing] = useState<EditingTreeItem | null>(null);
   const committingRef = useRef(false);
   const visibleTree = useMemo(() => mergeAcademicDraftNodes(tree, draftNodes), [tree, draftNodes]);
+  const { openStates, toggleNodeOpen } = usePersistentTreeOpenStates(openStateStorageKey);
 
   const removeDraftSubtree = (key: string) => {
     setDraftNodes(prev => removeAcademicDraftSubtree(prev, key));
@@ -223,6 +227,8 @@ export function useAcademicTreeController<TSubject>({
       canDelete,
       onDelete: deleteNode,
       actions: nodeActions,
+      openStates,
+      onToggleOpen: toggleNodeOpen,
       onEditChange: (value: string) => setEditing(prev => prev ? { ...prev, value } : prev),
       onEditCommit: commitEditing,
       onEditCancel: cancelEditing,

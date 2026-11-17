@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
-import { RECORDS_TREE_COLLAPSED_KEY } from './constants';
+import { RECORDS_TREE_COLLAPSED_KEY, RECORDS_TREE_OPEN_STATES_KEY } from './constants';
 import { ClassItem, RecordsTreeNode } from './types';
+import { usePersistentTreeOpenStates } from '../../hooks/usePersistentTreeOpenStates';
 
 function buildRecordsTree(classes: ClassItem[]): RecordsTreeNode[] {
   const result: RecordsTreeNode[] = [];
@@ -41,23 +42,22 @@ function buildRecordsTree(classes: ClassItem[]): RecordsTreeNode[] {
   return result;
 }
 
-export function useRecordsTree(classes: ClassItem[]) {
+export function useRecordsTree(classes: ClassItem[], {
+  collapsedStorageKey = RECORDS_TREE_COLLAPSED_KEY,
+  openStatesStorageKey = RECORDS_TREE_OPEN_STATES_KEY,
+}: { collapsedStorageKey?: string; openStatesStorageKey?: string } = {}) {
   const [tree, setTree] = useState<RecordsTreeNode[]>([]);
-  const [collapsed, setCollapsed] = useState(() => localStorage.getItem(RECORDS_TREE_COLLAPSED_KEY) === '1');
-  const [openStates, setOpenStates] = useState<Record<string, boolean>>({});
+  const [collapsed, setCollapsed] = useState(() => localStorage.getItem(collapsedStorageKey) === '1');
+  const { openStates, getNodeOpen, toggleNodeOpen } = usePersistentTreeOpenStates(openStatesStorageKey);
 
   useEffect(() => {
     setTree(buildRecordsTree(classes));
   }, [classes]);
 
-  const getNodeOpen = (path: string) => path in openStates ? openStates[path] : true;
-  const toggleNodeOpen = (path: string) =>
-    setOpenStates(prev => ({ ...prev, [path]: !(path in prev ? prev[path] : true) }));
-
   const toggleCollapsed = () => {
     const next = !collapsed;
     setCollapsed(next);
-    localStorage.setItem(RECORDS_TREE_COLLAPSED_KEY, next ? '1' : '0');
+    localStorage.setItem(collapsedStorageKey, next ? '1' : '0');
   };
 
   return {

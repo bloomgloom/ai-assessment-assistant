@@ -11,6 +11,7 @@ import { saveBlob } from '../../lib/desktopFiles';
 import {
   CRITERIA_SELECTION_KEY,
   CRITERIA_SOURCE_TYPE,
+  CRITERIA_TREE_OPEN_STATES_KEY,
   CRITERIA_TREE_KEY_PREFIXES,
   CRITERIA_TREE_TEXT,
 } from './constants';
@@ -119,6 +120,7 @@ export function useCriteriaTree() {
 
   const criteriaTree = useAcademicTreeController<CriteriaSubjectItem>({
     tree,
+    openStateStorageKey: CRITERIA_TREE_OPEN_STATES_KEY,
     draftKeyPrefix: 'draft',
     selected: (item) => {
       const sub = item.subject;

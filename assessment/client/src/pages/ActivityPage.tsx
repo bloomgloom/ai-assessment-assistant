@@ -1,6 +1,5 @@
-import { Fragment, lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import { Download, PanelLeftClose, PanelLeftOpen, Plus, RefreshCw, Save, Trash2, Upload } from 'lucide-react';
-import type { PreviewArtifact } from '../components/ArtifactPreviewContent';
 import { PageLayout } from '../components/common/PageLayout';
 import { PageHeaderActions, type PageHeaderAction } from '../components/common/PageHeaderActions';
 import { ExecutionModeMenu, HeaderFilterSelect, HeaderImportMenu, HeaderViewToggleGroup } from '../components/common/HeaderViewControls';
@@ -12,11 +11,13 @@ import { StableTextarea } from '../components/common/StableTextarea';
 import { CompactArtifactCell } from '../components/common/CompactArtifactCell';
 import { ClaudeBatchResultsDialog, type ClaudeBatchResultJob } from '../components/common/ClaudeBatchResultsDialog';
 import { RecordsCollapsedTree } from '../features/records/RecordsCollapsedTree';
+import { ACTIVITY_LAST_CLASS_KEY, ACTIVITY_TREE_COLLAPSED_KEY, ACTIVITY_TREE_OPEN_STATES_KEY } from '../features/records/constants';
 import { useRecordsTree } from '../features/records/useRecordsTree';
 import type { ClassItem, RecordsTreeNode } from '../features/records/types';
 import { activityApi, classesApi, lessonPlansApi, type AcademicSubjectScope } from '../lib/api';
 import { openDirectory, saveBlob } from '../lib/desktopFiles';
 import { downloadFilename, treeBackupFilename } from '../lib/backupFilename';
+import { openArtifactPreview } from '../lib/artifactPreview';
 import { useAiBatchStore, type ActivityGenerationRequest } from '../stores/aiBatchStore';
 import { useRecordsUnsavedStore } from '../stores/recordsUnsavedStore';
 
@@ -25,8 +26,6 @@ interface ActivityFile { id: number; filename: string; summarized_at: string }
 interface StudentRow { id: number; student_num: number; name: string; summary: string; saved_summary: string; manually_edited?: number; is_absent: number; observation: string; topic: string; plus_text: string; minus_text: string; interesting_text: string; semester_summary?: string; files: ActivityFile[] }
 interface PlanRow { lessonNo: number; progress: string }
 type ActivityView = 'activity' | 'observation' | 'reflection' | 'comprehensive';
-const ArtifactPreviewModal = lazy(() => import('../components/ArtifactPreviewModal'));
-
 const scopeOf = (item: ClassItem): AcademicSubjectScope => ({ year: item.year, semester: item.semester, grade: item.grade, subject: item.subject });
 function nextDateAfter(value?: string) {
   const date = value ? new Date(`${value}T12:00:00`) : new Date();
@@ -52,7 +51,6 @@ export default function ActivityPage() {
   const [settings, setSettings] = useState<any>(null);
   const [planRows, setPlanRows] = useState<PlanRow[]>([]);
   const [linkedSubjects, setLinkedSubjects] = useState<Record<string, boolean>>({});
-  const [previewArtifact, setPreviewArtifact] = useState<PreviewArtifact | null>(null);
   const [uploadingCell, setUploadingCell] = useState('');
   const [showBatchResults, setShowBatchResults] = useState(false);
   const [receivingBatchId, setReceivingBatchId] = useState('');
@@ -66,7 +64,10 @@ export default function ActivityPage() {
   const frozenLayout = recordsFrozenLayout(columnWidths);
   const selectedClass = classes.find(item => item.id === classId);
   const selectedDateRow = dates.find(item => item.activity_date === selectedDate);
-  const recordsTree = useRecordsTree(classes);
+  const recordsTree = useRecordsTree(classes, {
+    collapsedStorageKey: ACTIVITY_TREE_COLLAPSED_KEY,
+    openStatesStorageKey: ACTIVITY_TREE_OPEN_STATES_KEY,
+  });
   const excelMode = settings?.record_mode === 'excel';
   const setHasUnsavedChanges = useRecordsUnsavedStore(state => state.setHasUnsavedChanges);
   const aiBatchJob = useAiBatchStore(state => state.currentJob);
@@ -144,9 +145,12 @@ export default function ActivityPage() {
     void loadLinkedSubjects();
     classesApi.getAll().then(({ data }) => {
       setClasses(data);
-      if (data[0]) {
-        activeClassIdRef.current = data[0].id;
-        setClassId(data[0].id);
+      const savedClassId = Number(localStorage.getItem(ACTIVITY_LAST_CLASS_KEY));
+      const initialClass = data.find((item: ClassItem) => item.id === savedClassId) || data[0];
+      if (initialClass) {
+        activeClassIdRef.current = initialClass.id;
+        setClassId(initialClass.id);
+        localStorage.setItem(ACTIVITY_LAST_CLASS_KEY, String(initialClass.id));
       }
     });
   }, []);
@@ -494,6 +498,7 @@ export default function ActivityPage() {
     discardChanges();
     activeClassIdRef.current = nextClassId;
     setClassId(nextClassId);
+    localStorage.setItem(ACTIVITY_LAST_CLASS_KEY, String(nextClassId));
   };
   const selectDate = (nextDate: string) => {
     if (nextDate === selectedDate) return;
@@ -594,7 +599,7 @@ export default function ActivityPage() {
       let content: React.ReactNode = '-';
       const tableKey = String(date.id);
       const savedRow = savedTables[tableKey]?.find(item => item.id === row.id);
-      if (column.kind === 'files') content = <CompactArtifactCell files={row.files || []} pending={pendingFiles} uploading={uploadingCell === `${student.id}:${date.id}`} onPreview={file => setPreviewArtifact({ id: file.id, filename: file.filename, source: 'activity' })} onUpload={files => uploadStudentFiles(student, date, files)}/>;
+      if (column.kind === 'files') content = <CompactArtifactCell files={row.files || []} pending={pendingFiles} uploading={uploadingCell === `${student.id}:${date.id}`} onPreview={file => openArtifactPreview({ id: file.id, filename: file.filename, source: 'activity' })} onUpload={files => uploadStudentFiles(student, date, files)}/>;
       if (column.kind === 'activity') content = <div className="records-table-fill-content group/llm-error relative"><StableTextarea className={`textarea w-full disabled:cursor-not-allowed disabled:bg-gray-100 disabled:text-gray-500 ${activityError ? 'border-rose-300 bg-rose-50' : row.summary !== savedRow?.summary ? 'border-amber-300 bg-amber-50' : ''}`} style={{ minHeight: 80, height: rowTextareaHeight }} disabled={activityCellLocked} title={activityCellLocked ? 'AI 생성 진행 중이라 수정할 수 없습니다.' : undefined} value={row.summary || ''} onChange={event => updateActivitySummary(row.id, date.id, event.target.value)}/>{activityError && <div className="pointer-events-none absolute left-1/2 top-full z-50 mt-2 hidden w-80 -translate-x-1/2 rounded-md border border-rose-200 bg-rose-50 p-3 text-left text-xs text-rose-950 shadow-lg group-hover/llm-error:block group-focus-within/llm-error:block"><div className="mb-1 font-semibold text-rose-700">LLM 오류</div><div className="whitespace-pre-wrap">{activityError.error}</div>{activityError.result && <div className="mt-2 whitespace-pre-wrap border-t border-rose-200 pt-2 text-rose-800">{activityError.result}</div>}</div>}</div>;
       if (column.kind === 'absent') content = <input type="checkbox" checked={!!row.is_absent} disabled={excelMode} onChange={event => setTables(current => ({ ...current, [tableKey]: current[tableKey].map(item => item.id === row.id ? { ...item, is_absent: event.target.checked ? 1 : 0 } : item) }))}/>;
       if (column.kind === 'observation') content = excelMode ? <span className="whitespace-pre-wrap">{row.observation || '-'}</span> : <StableTextarea className={`textarea w-full disabled:bg-gray-100 disabled:text-gray-400 ${row.observation !== savedRow?.observation ? 'border-amber-300 bg-amber-50' : ''}`} style={{ minHeight: 80, height: rowTextareaHeight }} disabled={!!row.is_absent} value={row.observation || ''} onChange={event => setTables(current => ({ ...current, [tableKey]: current[tableKey].map(item => item.id === row.id ? { ...item, observation: event.target.value } : item) }))}/>;
@@ -666,7 +671,6 @@ export default function ActivityPage() {
       onReceive={receiveBatchResult}
       onClose={() => setShowBatchResults(false)}
     />}
-    <Suspense fallback={null}><ArtifactPreviewModal artifact={previewArtifact} onClose={() => setPreviewArtifact(null)}/></Suspense>
     {result && <BulkImportResultDialog title="산출물 업로드 결과" message={result.message} onClose={() => setResult(null)} results={(result.results || []).filter((item: any) => item.status !== 'unchanged')} stats={[{label:'전체 파일',value:result.total||0},{label:'새 파일',value:result.added||0},{label:'기존 파일 업데이트',value:result.updated||0},{label:'변경 없음',value:result.unchanged||0},{label:'연결 학생',value:result.studentCount||0},{label:'미매칭',value:result.unmatchedCount||0},{label:'날짜 칸 없음',value:result.dateMissingCount||0},{label:'충돌/오류',value:(result.conflictCount||0)+(result.errorCount||0)}]} groupLabel={(key,items) => { if (key === '연결 안 됨') return `연결 안 됨 — ${items.length}개`; const date = dates.find(item => item.activity_date === key); return `${key} · ${date?.lesson_no ?? '-'}차시 · ${date?.progress || '진도 없음'} — 새 파일 ${items.filter(item => item.status === 'added' || item.status === 'updated').length}개`; }}/>} 
   </PageLayout>;
 }

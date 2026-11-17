@@ -5,6 +5,9 @@ const http = require('http');
 const net = require('net');
 const path = require('path');
 
+const [systemLanguage] = app.getPreferredSystemLanguages();
+if (systemLanguage) app.commandLine.appendSwitch('lang', systemLanguage);
+
 const ASSESSMENT_HOST = '127.0.0.1';
 const DEFAULT_ASSESSMENT_PORT = 3201;
 const ASSIGNMENT_HOST = '0.0.0.0';
