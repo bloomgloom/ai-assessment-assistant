@@ -631,16 +631,6 @@ export function SettingsContent({
           </div>
         )}
 
-        <div className="border-t border-gray-100 pt-4">
-          <h3 className="text-sm font-semibold mb-2">공급자별 안내</h3>
-          <ul className="text-xs text-gray-600 space-y-1.5">
-            <li><span className="font-medium">Google Gemini:</span> Google AI Studio에서 API 키 발급 → gemini-2.5-flash 권장</li>
-            <li><span className="font-medium">OpenAI:</span> OpenAI 플랫폼에서 API 키 발급 → gpt-4o-mini 권장</li>
-            <li><span className="font-medium">Anthropic:</span> Anthropic Console에서 API 키 발급 → Claude 최신 모델명을 직접 입력하거나 모델 가져오기를 사용하세요.</li>
-            <li><span className="font-medium">Ollama:</span> 로컬 Ollama 서버 실행 후 사용</li>
-            <li><span className="font-medium">OpenAI 호환:</span> 기본 서버는 <code className="bg-gray-100 px-1 rounded">http://localhost:8000/v1</code>이며, 모델 가져오기로 목록을 불러올 수 있습니다.</li>
-          </ul>
-        </div>
       </div>
       </div>
       )}
