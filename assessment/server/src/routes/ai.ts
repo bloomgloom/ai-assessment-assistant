@@ -946,7 +946,9 @@ router.post('/generate-claude-batch', async (req: Request, res: Response) => {
     }
 
     let providerBatchId = `local_${Date.now()}`;
-    let status = 'ended';
+    // Claude에 보낼 요청이 없어도 사용자가 "결과 받기"를 눌러야
+    // 기본 점수를 반영하도록 수령 대기 작업으로 남겨 둡니다.
+    let status = 'in_progress';
     if (requests.length > 0) {
       const batch = await createAnthropicMessageBatch(settings, requests);
       providerBatchId = batch.id;
@@ -1127,9 +1129,8 @@ router.post('/claude-batch-results', async (req: Request, res: Response) => {
         immediateUpdates?: Array<{ studentId: number; contentType: 'scoring' | 'comments'; domain: string; content?: string; error?: string }>;
       };
 
-      for (const item of metadata.immediateUpdates || []) updates.push(item);
-
       if (job.provider_batch_id.startsWith('local_')) {
+        for (const item of metadata.immediateUpdates || []) updates.push(item);
         await execute('UPDATE ai_batch_jobs SET status=?, updated_at=datetime(\'now\') WHERE provider_batch_id=?', ['ended', batchId]);
         continue;
       }
@@ -1140,6 +1141,9 @@ router.post('/claude-batch-results', async (req: Request, res: Response) => {
         inProgress = true;
         continue;
       }
+
+      // 산출물 없는 학생의 기본 점수도 Claude 결과와 같은 시점에 반영합니다.
+      for (const item of metadata.immediateUpdates || []) updates.push(item);
 
       const metaById = new Map((metadata.requests || []).map((item) => [item.customId, item]));
       const classContext = await getClassContextByClass(job.class_id);
