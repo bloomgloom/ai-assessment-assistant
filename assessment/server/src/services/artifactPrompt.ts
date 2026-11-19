@@ -1,7 +1,7 @@
 import fs from 'fs';
 import { extractHwpxText } from './hwpx';
 import { imageFileToAttachment, pdfToRedactedJpegAttachments } from './visionArtifacts';
-import { buildNotebookExecutionEvidence, buildTabularDataEvidence } from './artifactEvidence';
+import { buildNotebookExecutionEvidence, buildPythonFileExecutionEvidence, buildTabularDataEvidence } from './artifactEvidence';
 import { resolveStoredPath } from './storage';
 import type { LLMImageAttachment, LLMSettings } from './llm';
 
@@ -203,20 +203,21 @@ export async function appendArtifactContents(
           hasContent = true;
         }
       } catch { /* skip */ }
-      try {
-        const evidence = await buildNotebookExecutionEvidence(
-          resolvedArtifact,
-          artifacts.map((item) => ({ ...item, filepath: resolveStoredPath(item.filepath) })),
-          privacyMapper.artifactName(artifact),
-          { skipFirstMarkdownCell: settings.artifactStripIntroBlocksDeprecated },
-        );
-        const text = privacyMapper.sanitizeText(evidence.text);
-        if (text) {
-          parts.push(`[${promptLabel}]\n${text}\n---`);
-          hasContent = true;
-        }
-        attachments.push(...evidence.attachments);
-      } catch { /* skip */ }
+      const evidence = await buildNotebookExecutionEvidence(
+        resolvedArtifact,
+        artifacts.map((item) => ({ ...item, filepath: resolveStoredPath(item.filepath) })),
+        privacyMapper.artifactName(artifact),
+        { skipFirstMarkdownCell: settings.artifactStripIntroBlocksDeprecated },
+      );
+      if (!evidence.executionSucceeded) {
+        throw new Error(`${promptLabel} 노트북 재실행 실패: ${evidence.executionError || '원인을 확인할 수 없습니다.'}`);
+      }
+      const text = privacyMapper.sanitizeText(evidence.text);
+      if (text) {
+        parts.push(`[${promptLabel}]\n${text}\n---`);
+        hasContent = true;
+      }
+      attachments.push(...evidence.attachments);
     } else if (['csv', 'tsv', 'xlsx', 'xls'].includes(ext)) {
       try {
         const text = privacyMapper.sanitizeText(await buildTabularDataEvidence(resolvedArtifact));
@@ -226,14 +227,29 @@ export async function appendArtifactContents(
         }
       } catch { /* skip */ }
     } else if (codeExts[ext]) {
+      let code: string | null = null;
       try {
         const rawCode = fs.readFileSync(filepath, 'utf-8');
-        const code = privacyMapper.sanitizeText(
+        code = privacyMapper.sanitizeText(
           settings.artifactStripIntroBlocks ? stripLeadingCodeIntroBlock(rawCode, ext) : rawCode
         );
-        parts.push(`[${promptLabel}]\n\`\`\`${codeExts[ext]}\n${code}\n\`\`\`\n---`);
-        hasContent = true;
       } catch { /* skip */ }
+      if (code !== null) {
+        let executionText = '';
+        if (ext === 'py') {
+          const evidence = await buildPythonFileExecutionEvidence(
+            resolvedArtifact,
+            artifacts.map(item => ({ ...item, filepath: resolveStoredPath(item.filepath) })),
+            privacyMapper.artifactName(artifact),
+          );
+          if (!evidence.executionSucceeded) {
+            throw new Error(`${promptLabel} Python 실행 실패: ${evidence.executionError || '원인을 확인할 수 없습니다.'}`);
+          }
+          executionText = `\n${privacyMapper.sanitizeText(evidence.text)}`;
+        }
+        parts.push(`[${promptLabel}]\n\`\`\`${codeExts[ext]}\n${code}\n\`\`\`${executionText}\n---`);
+        hasContent = true;
+      }
     } else if (artifact.mime_type === 'text/plain' || ext === 'txt') {
       try {
         let text: string;
@@ -271,6 +287,34 @@ export async function appendArtifactContents(
   }
 
   return hasContent;
+}
+
+export type ArtifactPromptPreparation =
+  | { ok: true; hasContent: boolean; attachments: LLMImageAttachment[] }
+  | { ok: false; hasContent: false; attachments: LLMImageAttachment[]; error: string };
+
+/**
+ * Shared boundary for every LLM workflow that consumes student artifacts.
+ * It keeps notebook/PDF execution failures out of provider requests while
+ * returning one consistent error shape to scoring and activity workflows.
+ */
+export async function prepareArtifactPromptContents(
+  parts: string[],
+  artifacts: ArtifactRow[],
+  settings: Pick<LLMSettings, 'artifactStripIntroBlocks' | 'artifactStripIntroBlocksDeprecated' | 'pdfRedactionTopCm'>,
+): Promise<ArtifactPromptPreparation> {
+  const attachments: LLMImageAttachment[] = [];
+  try {
+    const hasContent = await appendArtifactContents(parts, artifacts, settings, attachments);
+    return { ok: true, hasContent, attachments };
+  } catch (error) {
+    return {
+      ok: false,
+      hasContent: false,
+      attachments: [],
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
 }
 
 

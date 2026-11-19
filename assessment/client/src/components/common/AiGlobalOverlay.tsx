@@ -1,13 +1,27 @@
+import { useEffect } from 'react';
 import { AlertCircle, CheckCircle2, Loader2 } from 'lucide-react';
 import { useAiBatchStore } from '../../stores/aiBatchStore';
 import { useAiOverlayStore } from '../../stores/aiOverlayStore';
+import { startDisplaySleepPrevention, stopDisplaySleepPrevention } from '../../lib/displaySleepPrevention';
 import { AiProgressOverlay } from './AiProgressOverlay';
 
 export function AiGlobalOverlay() {
   const overlay = useAiOverlayStore();
   const batchJob = useAiBatchStore(state => state.currentJob);
+  const pendingClaudeRequest = useAiBatchStore(state => state.claudeBatchJobs.find(job =>
+    job.mode === 'claude-batch' && job.status === 'running' && !job.providerBatchIds?.length
+  ));
   const stopBatch = useAiBatchStore(state => state.stopBatch);
   const clearFinishedBatch = useAiBatchStore(state => state.clearFinished);
+
+  useEffect(() => {
+    (window as any).__aiBatchRequestPending = Boolean(pendingClaudeRequest);
+    if (pendingClaudeRequest) void startDisplaySleepPrevention();
+    return () => {
+      (window as any).__aiBatchRequestPending = false;
+      if (pendingClaudeRequest) void stopDisplaySleepPrevention();
+    };
+  }, [pendingClaudeRequest]);
 
   const batchRunning = batchJob?.status === 'running' || batchJob?.status === 'stopping';
   const batchFinished = batchJob && !batchRunning;
@@ -22,6 +36,24 @@ export function AiGlobalOverlay() {
         stopping={overlay.stopping}
         onStop={overlay.stop}
         tone="blue"
+      />
+    );
+  }
+
+  if (pendingClaudeRequest) {
+    const requestLabel = pendingClaudeRequest.domains
+      .map(domain => domain === '__ACTIVITY__' ? '활동 기록' : domain === '__ACTIVITY_SEMESTER__' ? '활동 종합' : domain === '__SUBJECT_COMPREHENSIVE__' ? '세특' : domain)
+      .join(', ');
+    return (
+      <AiProgressOverlay
+        title={<span className="flex items-center gap-2">Claude 배치 요청 준비 중{pendingClaudeRequest.total > 0 && <span className="text-sm font-medium tabular-nums text-gray-500">({pendingClaudeRequest.completed}/{pendingClaudeRequest.total})</span>}</span>}
+        message={requestLabel}
+        detail={pendingClaudeRequest.classLabel}
+        progress={pendingClaudeRequest.total > 0 ? (pendingClaudeRequest.completed / pendingClaudeRequest.total) * 100 : undefined}
+        indeterminate={pendingClaudeRequest.total <= 0}
+        running={false}
+        tone="blue"
+        backdrop="strong"
       />
     );
   }

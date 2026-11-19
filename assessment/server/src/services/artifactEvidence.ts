@@ -1,11 +1,17 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
+import crypto from 'crypto';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 import type { LLMImageAttachment } from './llm';
+import { SerialTaskQueue } from './serialTaskQueue';
+import { ensureDir, storagePath } from './storage';
 
 const execFileAsync = promisify(execFile);
+const artifactExecutionQueue = new SerialTaskQueue();
+const NOTEBOOK_CACHE_VERSION = 5;
+const notebookCacheDir = storagePath('cache', 'artifact-execution');
 
 export interface EvidenceArtifact {
   filename: string;
@@ -20,10 +26,84 @@ interface PythonRunResult {
 interface NotebookEvidenceResult {
   text: string;
   attachments: LLMImageAttachment[];
+  executionSucceeded: boolean;
+  executionError?: string;
 }
 
 interface NotebookEvidenceOptions {
   skipFirstMarkdownCell?: boolean;
+  executionKind?: 'notebook' | 'python-script';
+}
+
+async function appendFileHash(hash: crypto.Hash, filepath: string): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    const stream = fs.createReadStream(filepath);
+    stream.on('data', chunk => hash.update(chunk));
+    stream.on('error', reject);
+    stream.on('end', resolve);
+  });
+}
+
+function pythonEnvironmentFingerprint(): string {
+  const manifestPath = process.env.PYTHON_RUNTIME_DIR
+    ? path.join(process.env.PYTHON_RUNTIME_DIR, 'runtime-manifest.json')
+    : '';
+  let manifest = '';
+  try { if (manifestPath) manifest = fs.readFileSync(manifestPath, 'utf8'); } catch {}
+  return JSON.stringify({
+    python: process.env.ASSESSMENT_PYTHON || '',
+    baseRequirements: process.env.ASSESSMENT_BASE_REQUIREMENTS_JSON || '',
+    manifest,
+  });
+}
+
+export async function notebookEvidenceCacheKey(
+  notebook: EvidenceArtifact,
+  artifacts: EvidenceArtifact[],
+  label: string,
+  options: NotebookEvidenceOptions = {},
+): Promise<string> {
+  const hash = crypto.createHash('sha256');
+  hash.update(JSON.stringify({
+    version: NOTEBOOK_CACHE_VERSION,
+    notebook: notebook.filename.normalize('NFC'),
+    label,
+    options,
+    python: pythonEnvironmentFingerprint(),
+  }));
+  for (const artifact of artifacts) {
+    hash.update('\0');
+    hash.update(artifact.filename.normalize('NFC'));
+    hash.update('\0');
+    await appendFileHash(hash, artifact.filepath);
+  }
+  return hash.digest('hex');
+}
+
+function readNotebookCache(cacheKey: string): NotebookEvidenceResult | null {
+  try {
+    const value = JSON.parse(fs.readFileSync(path.join(notebookCacheDir, `${cacheKey}.json`), 'utf8')) as NotebookEvidenceResult;
+    return value?.executionSucceeded && typeof value.text === 'string' && Array.isArray(value.attachments) ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeNotebookCache(cacheKey: string, value: NotebookEvidenceResult): void {
+  ensureDir(notebookCacheDir);
+  const target = path.join(notebookCacheDir, `${cacheKey}.json`);
+  const temp = `${target}.${process.pid}.tmp`;
+  fs.writeFileSync(temp, JSON.stringify(value), 'utf8');
+  fs.renameSync(temp, target);
+
+  // Changed submissions naturally create new keys. Keep the cache bounded.
+  const entries = fs.readdirSync(notebookCacheDir)
+    .filter(filename => filename.endsWith('.json'))
+    .map(filename => ({ filename, mtimeMs: fs.statSync(path.join(notebookCacheDir, filename)).mtimeMs }))
+    .sort((a, b) => b.mtimeMs - a.mtimeMs);
+  for (const entry of entries.slice(1000)) {
+    try { fs.rmSync(path.join(notebookCacheDir, entry.filename), { force: true }); } catch {}
+  }
 }
 
 function truncate(value: string, maxChars: number): string {
@@ -322,7 +402,7 @@ try:
 
     client = NotebookClient(
         nb,
-        timeout=30,
+        timeout=120,
         kernel_name="python3",
         allow_errors=True,
         resources={"metadata": {"path": work_dir}},
@@ -394,39 +474,146 @@ function formatNotebookEvidence(result: any): string {
   return truncate(lines.join('\n'), 42000);
 }
 
+export function notebookExecutionFailure(result: any): string | null {
+  if (!result?.ok) return String(result?.error || '노트북 실행 결과를 생성하지 못했습니다.');
+  if (!result?.rerun) return '현재 제출 파일 기준 재실행 결과가 없습니다.';
+  // allow_errors=True로 수집된 셀 오류는 학생 코드의 실행 결과다.
+  // 커널/시간 초과처럼 결과 자체를 만들지 못한 경우만 위에서 실패한다.
+  return null;
+}
+
 export async function buildNotebookExecutionEvidence(
   notebook: EvidenceArtifact,
   artifacts: EvidenceArtifact[],
   label: string,
   options: NotebookEvidenceOptions = {},
 ): Promise<NotebookEvidenceResult> {
-  const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'assessment-notebook-work-'));
-  const imageDir = fs.mkdtempSync(path.join(os.tmpdir(), 'assessment-notebook-images-'));
-  try {
-    copyArtifactsToWorkDir(artifacts, workDir);
-    const notebookPath = path.join(workDir, path.basename(notebook.filename.normalize('NFC')));
-    const stdout = (await runPythonScript(NOTEBOOK_EXECUTION_SCRIPT, [
-      notebookPath,
-      workDir,
-      imageDir,
-      options.skipFirstMarkdownCell ? '1' : '0',
-    ], 180000)).stdout;
-    const result = parsePythonJson(stdout);
-    const attachments = fs.readdirSync(imageDir)
-      .filter((filename) => filename.toLowerCase().endsWith('.png'))
-      .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))
-      .slice(0, 12)
-      .map((filename) => ({
-        filename: `${label} ${filename}`,
-        mimeType: 'image/png',
-        data: fs.readFileSync(path.join(imageDir, filename)).toString('base64'),
-      }));
-    return { text: formatNotebookEvidence(result), attachments };
-  } catch (e) {
-    const message = e instanceof Error ? e.message : String(e);
-    return { text: `[노트북 실행 evidence]\n노트북 실행 실패 또는 생략: ${message}`, attachments: [] };
-  } finally {
-    fs.rmSync(workDir, { recursive: true, force: true });
-    fs.rmSync(imageDir, { recursive: true, force: true });
+  const cacheKey = await notebookEvidenceCacheKey(notebook, artifacts, label, options);
+  const cached = readNotebookCache(cacheKey);
+  if (cached) return cached;
+
+  return artifactExecutionQueue.run(async () => {
+    const queuedCache = readNotebookCache(cacheKey);
+    if (queuedCache) return queuedCache;
+    const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'assessment-notebook-work-'));
+    const imageDir = fs.mkdtempSync(path.join(os.tmpdir(), 'assessment-notebook-images-'));
+    try {
+      copyArtifactsToWorkDir(artifacts, workDir);
+      const notebookPath = path.join(workDir, path.basename(notebook.filename.normalize('NFC')));
+      const stdout = (await runPythonScript(NOTEBOOK_EXECUTION_SCRIPT, [
+        notebookPath,
+        workDir,
+        imageDir,
+        options.skipFirstMarkdownCell ? '1' : '0',
+      ], 600000)).stdout;
+      const result = parsePythonJson(stdout);
+      const executionError = notebookExecutionFailure(result);
+      const attachments = fs.readdirSync(imageDir)
+        .filter((filename) => filename.toLowerCase().endsWith('.png'))
+        .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))
+        .slice(0, 12)
+        .map((filename) => ({
+          filename: `${label} ${filename}`,
+          mimeType: 'image/png',
+          data: fs.readFileSync(path.join(imageDir, filename)).toString('base64'),
+        }));
+      const evidence: NotebookEvidenceResult = {
+        text: formatNotebookEvidence(result),
+        attachments,
+        executionSucceeded: executionError === null,
+        ...(executionError ? { executionError } : {}),
+      };
+      if (evidence.executionSucceeded) {
+        try { writeNotebookCache(cacheKey, evidence); } catch { /* cache failure must not invalidate execution evidence */ }
+      }
+      return evidence;
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      return {
+        text: `[노트북 실행 evidence]\n노트북 실행 실패 또는 생략: ${message}`,
+        attachments: [],
+        executionSucceeded: false,
+        executionError: message,
+      };
+    } finally {
+      fs.rmSync(workDir, { recursive: true, force: true });
+      fs.rmSync(imageDir, { recursive: true, force: true });
+    }
+  });
+}
+
+function pythonScriptEvidence(stdout: string, stderr: string, exitCode: number): string {
+  const lines = [
+    '[Python 파일 실행 결과]',
+    `종료 코드: ${exitCode}`,
+    `[stdout]\n${truncate(stdout.trim() || '(출력 없음)', 12000)}`,
+  ];
+  if (stderr.trim()) lines.push(`[stderr]\n${truncate(stderr.trim(), 12000)}`);
+  return lines.join('\n');
+}
+
+async function executePythonFile(scriptPath: string, workDir: string): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+  const candidates = [process.env.ASSESSMENT_PYTHON, 'python3', 'python'].filter(Boolean) as string[];
+  let lastError: unknown = null;
+  for (const pythonPath of candidates) {
+    try {
+      const result = await execFileAsync(pythonPath, [scriptPath], {
+        cwd: workDir,
+        timeout: Math.max(100, Number(process.env.PYTHON_EXECUTION_TIMEOUT_MS) || 600000),
+        maxBuffer: 20 * 1024 * 1024,
+        env: { ...process.env, MPLCONFIGDIR: path.join(workDir, '.matplotlib') },
+      });
+      return { stdout: result.stdout, stderr: result.stderr, exitCode: 0 };
+    } catch (error) {
+      lastError = error;
+      const failure = error as NodeJS.ErrnoException & { stdout?: string; stderr?: string; killed?: boolean; signal?: string | null };
+      if (failure.code === 'ENOENT') continue;
+      if (failure.killed || failure.signal) throw new Error('Python 파일 실행 시간이 제한을 초과했거나 프로세스가 비정상 종료되었습니다.');
+      if (typeof failure.code === 'number') {
+        return { stdout: String(failure.stdout || ''), stderr: String(failure.stderr || failure.message || ''), exitCode: failure.code };
+      }
+      throw error;
+    }
   }
+  throw lastError || new Error('Python 실행 파일을 찾을 수 없습니다.');
+}
+
+export async function buildPythonFileExecutionEvidence(
+  script: EvidenceArtifact,
+  artifacts: EvidenceArtifact[],
+  label: string,
+): Promise<NotebookEvidenceResult> {
+  const options: NotebookEvidenceOptions = { executionKind: 'python-script' };
+  const cacheKey = await notebookEvidenceCacheKey(script, artifacts, label, options);
+  const cached = readNotebookCache(cacheKey);
+  if (cached) return cached;
+
+  return artifactExecutionQueue.run(async () => {
+    const queuedCache = readNotebookCache(cacheKey);
+    if (queuedCache) return queuedCache;
+    const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'assessment-python-work-'));
+    try {
+      copyArtifactsToWorkDir(artifacts, workDir);
+      const scriptPath = path.join(workDir, path.basename(script.filename.normalize('NFC')));
+      const result = await executePythonFile(scriptPath, workDir);
+      const evidence: NotebookEvidenceResult = {
+        text: pythonScriptEvidence(result.stdout, result.stderr, result.exitCode),
+        attachments: [],
+        // A non-zero exit code and traceback are valid student-code evidence.
+        executionSucceeded: true,
+      };
+      try { writeNotebookCache(cacheKey, evidence); } catch { /* cache failure must not invalidate execution evidence */ }
+      return evidence;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return {
+        text: `[Python 파일 실행 결과]\n실행 결과 수집 실패: ${message}`,
+        attachments: [],
+        executionSucceeded: false,
+        executionError: message,
+      };
+    } finally {
+      fs.rmSync(workDir, { recursive: true, force: true });
+    }
+  });
 }

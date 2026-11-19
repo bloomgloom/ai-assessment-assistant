@@ -24,7 +24,5 @@ if (Test-Path $VenvDir) {
 }
 
 py "-$PythonVersion" -m venv $VenvDir
-& (Join-Path $VenvDir "Scripts\python.exe") -m pip install --upgrade pip
 & (Join-Path $VenvDir "Scripts\python.exe") -m pip install -r (Join-Path $PythonDir "requirements.txt")
-
-Write-Host "Python evidence environment ready: $VenvDir"
+Write-Host "Python bootstrap environment ready: $VenvDir"

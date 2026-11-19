@@ -18,6 +18,7 @@ import { BulkImportResultDialog } from '../../components/common/BulkImportResult
 import { useResizableTable } from '../../components/common/useResizableTable';
 import { RecordsFrozenHeader, RecordsFrozenStudentCells, recordsFrozenLayout } from '../../components/common/RecordsTableFrozenColumns';
 import { ClaudeBatchResultsDialog, type ClaudeBatchResultJob } from '../../components/common/ClaudeBatchResultsDialog';
+import { bulkExistingPolicyActions, isExistingArtifactsConflict, type BulkExistingPolicy } from '../../lib/bulkArtifactImport';
 
 const ArtifactViewer = lazy(() => import('../../components/ArtifactViewer'));
 
@@ -150,7 +151,6 @@ interface BulkZipUploadResult {
   requiresExistingPolicy?: boolean;
 }
 
-type BulkExistingPolicy = 'skip' | 'replace' | 'append';
 type PendingBulkArtifactUpload = { file?: File; folderPath?: string };
 
 function recordsViewPrefsKey(classItem: ClassItem) {
@@ -678,19 +678,14 @@ export function useRecordsPage() {
           continue;
         }
         const key = `${update.studentId}_${update.contentType}_${update.domain}`;
-        const nextContent = update.content
-          ? parseContent(update.content)
-          : update.contentType === 'scoring'
+        const generatedContent = update.content ? parseContent(update.content) : {};
+        const nextContent = update.error
           ? {
-              total: 0,
+              ...generatedContent,
               __llmError: update.error,
               __llmErrorResult: update.llmResult,
             }
-          : {
-              text: '',
-              __llmError: update.error,
-              __llmErrorResult: update.llmResult,
-            };
+          : generatedContent;
         next = {
           ...next,
           [key]: nextContent,
@@ -1151,7 +1146,7 @@ export function useRecordsPage() {
         body: formData,
       });
       const data = await res.json();
-      if (res.status === 409 && data.conflict === 'existing_artifacts') {
+      if (res.status === 409 && isExistingArtifactsConflict(data)) {
         setPendingBulkArtifactUpload({ file, folderPath });
         setBulkZipResult({
           message: data.message,
@@ -1591,11 +1586,11 @@ export function useRecordsPage() {
                 { label: '미매칭', value: bulkZipResult.unmatchedCount },
                 { label: '충돌/오류', value: bulkZipResult.conflictCount + bulkZipResult.errorCount },
               ]}
-              actions={bulkZipResult.requiresExistingPolicy ? [
-                { label: '기존 유지 · 건너뛰기', className: 'btn-secondary', onClick: () => handleBulkExistingPolicy('skip') },
-                { label: '기존 삭제 · 새로 등록', className: 'btn-danger', onClick: () => handleBulkExistingPolicy('replace') },
-                { label: '기존과 새 파일 모두 등록', className: 'btn-primary', onClick: () => handleBulkExistingPolicy('append') },
-              ] : undefined}
+              actions={bulkZipResult.requiresExistingPolicy ? bulkExistingPolicyActions.map(action => ({
+                label: action.label,
+                className: action.className,
+                onClick: () => handleBulkExistingPolicy(action.policy),
+              })) : undefined}
             />
           )}
           {/* 테이블 뷰 */}
@@ -1782,11 +1777,12 @@ export function useRecordsPage() {
                             if (c.type === 'total') {
                               const contentKey = `${s.id}_scoring_${d.name}`;
                               const dirty = isContentFieldDirty(contentKey, 'total');
+                              const hasTotal = Object.prototype.hasOwnProperty.call(scoreData, 'total');
                               return (
                                 <td key={`${d.name}_total`} className={`group relative border-r text-center font-bold text-blue-600 align-middle p-2 ${dirty ? 'bg-amber-50' : 'bg-blue-50/30'}`}
                                   style={{ width: w, minWidth: w }}>
                                   {renderLlmErrorTooltip(domainLlmError)}
-                                  <span>{scoreData.total || 0}</span>
+                                  <span>{hasTotal ? scoreData.total : ''}</span>
                                   {renderCellResizeHandles(s.id, wk, defW)}
                                 </td>
                               );

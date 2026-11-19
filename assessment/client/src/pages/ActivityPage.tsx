@@ -18,6 +18,7 @@ import { activityApi, classesApi, lessonPlansApi, type AcademicSubjectScope } fr
 import { openDirectory, saveBlob } from '../lib/desktopFiles';
 import { downloadFilename, treeBackupFilename } from '../lib/backupFilename';
 import { openArtifactPreview } from '../lib/artifactPreview';
+import { bulkExistingPolicyActions, isExistingArtifactsConflict, type BulkExistingPolicy } from '../lib/bulkArtifactImport';
 import { useAiBatchStore, type ActivityGenerationRequest } from '../stores/aiBatchStore';
 import { useRecordsUnsavedStore } from '../stores/recordsUnsavedStore';
 
@@ -25,6 +26,7 @@ interface ActivityDate { id: number; activity_date: string; lesson_no: number; p
 interface ActivityFile { id: number; filename: string; summarized_at: string }
 interface StudentRow { id: number; student_num: number; name: string; summary: string; saved_summary: string; manually_edited?: number; is_absent: number; observation: string; topic: string; plus_text: string; minus_text: string; interesting_text: string; semester_summary?: string; files: ActivityFile[] }
 interface PlanRow { lessonNo: number; progress: string }
+interface PendingActivityImport { file?: File; folderPath?: string; selectedDate: string; allowDateFolders: boolean }
 type ActivityView = 'activity' | 'observation' | 'reflection' | 'comprehensive';
 const scopeOf = (item: ClassItem): AcademicSubjectScope => ({ year: item.year, semester: item.semester, grade: item.grade, subject: item.subject });
 function nextDateAfter(value?: string) {
@@ -46,6 +48,7 @@ export default function ActivityPage() {
   const [rosterStudents, setRosterStudents] = useState<StudentRow[]>([]);
   const [views, setViews] = useState<Set<ActivityView>>(() => new Set(['activity']));
   const [result, setResult] = useState<any>(null);
+  const [pendingActivityImport, setPendingActivityImport] = useState<PendingActivityImport | null>(null);
   const [busy, setBusy] = useState(false);
   const [selectedStudentIds, setSelectedStudentIds] = useState<Set<number>>(new Set());
   const [settings, setSettings] = useState<any>(null);
@@ -209,10 +212,24 @@ export default function ActivityPage() {
       return;
     }
     const generated = new Set<string>();
+    const failed = new Set<string>();
     const errors: Record<string, { error: string; result?: string }> = {};
     for (const update of pending) {
       const key = `${update.studentId}:${update.domain}`;
-      if (update.error) errors[key] = { error: update.error, result: update.llmResult };
+      if (update.error) {
+        failed.add(key);
+        errors[key] = { error: update.error, result: update.llmResult };
+        if (update.domain === '__ACTIVITY_SEMESTER__') {
+          setRosterStudents(current => current.map(row => row.id === update.studentId ? { ...row, semester_summary: '' } : row));
+          setTables(current => Object.fromEntries(Object.entries(current).map(([dateId, rows]) => [dateId, rows.map(row => row.id === update.studentId ? { ...row, semester_summary: '' } : row)])));
+        } else {
+          setTables(current => ({
+            ...current,
+            [update.domain]: (current[update.domain] || []).map(row => row.id === update.studentId ? { ...row, summary: '' } : row),
+          }));
+        }
+        continue;
+      }
       if (!update.content) continue;
       const content = update.content;
       generated.add(key);
@@ -226,8 +243,18 @@ export default function ActivityPage() {
         }));
       }
     }
-    if (generated.size) setGeneratedCells(current => new Set([...current, ...generated]));
-    if (Object.keys(errors).length) setLlmErrors(current => ({ ...current, ...errors }));
+    if (generated.size || failed.size) setGeneratedCells(current => {
+      const next = new Set(current);
+      failed.forEach(key => next.delete(key));
+      generated.forEach(key => next.add(key));
+      return next;
+    });
+    if (generated.size || failed.size) setLlmErrors(current => {
+      const next = { ...current };
+      generated.forEach(key => delete next[key]);
+      Object.assign(next, errors);
+      return next;
+    });
     appliedUpdateCountRef.current = aiBatchUpdates.length;
   }, [aiBatchUpdates, classId]);
   const allStudentsSelected = students.length > 0 && students.every(student => selectedStudentIds.has(student.id));
@@ -351,48 +378,48 @@ export default function ActivityPage() {
     }
     catch (error: any) { alert(error?.response?.data?.error || '날짜를 삭제하지 못했습니다.'); }
   };
+  const runActivityImport = async (pending: PendingActivityImport, existingPolicy: BulkExistingPolicy | '' = ''): Promise<void> => {
+    if (!classId) return;
+    setBusy(true);
+    try {
+      const response = pending.file
+        ? await activityApi.importZip(classId, pending.file, pending.selectedDate, pending.allowDateFolders, existingPolicy)
+        : await activityApi.importFolder(classId, pending.folderPath || '', pending.selectedDate, pending.allowDateFolders, existingPolicy);
+      setPendingActivityImport(null);
+      setResult(response.data);
+      await refresh();
+    } catch (error: any) {
+      const data = error?.response?.data;
+      if (error?.response?.status === 409 && data?.code === 'DATE_FOLDERS_FOUND') {
+        if (confirm(`${data.error}\n\n날짜 폴더를 무시하고 ${pending.selectedDate} 산출물로 계속 업로드하시겠습니까?`)) {
+          await runActivityImport({ ...pending, allowDateFolders: true }, existingPolicy);
+        }
+        return;
+      }
+      if (error?.response?.status === 409 && isExistingArtifactsConflict(data)) {
+        setPendingActivityImport(pending);
+        setResult({ ...data, requiresExistingPolicy: true });
+        return;
+      }
+      alert(data?.error || '산출물을 불러오지 못했습니다.');
+    } finally {
+      setBusy(false);
+    }
+  };
   const importZip = async (file?: File) => {
     if (!file || !classId) return;
     if (isDirty) return alert('변경한 활동 기록을 먼저 저장해 주세요.');
     if (views.has('reflection') && !views.has('activity') && selectedDate !== 'all') return alert('성찰 기록 업로드는 전체 날짜 보기에서 사용할 수 있습니다.');
-    setBusy(true);
-    try {
-      const targetDate = selectedDate === 'all' ? '' : selectedDate;
-      let response;
-      try { response = await activityApi.importZip(classId, file, targetDate); }
-      catch (error: any) {
-        if (error?.response?.status !== 409 || error?.response?.data?.code !== 'DATE_FOLDERS_FOUND') throw error;
-        if (!confirm(`${error.response.data.error}\n\n날짜 폴더를 무시하고 ${targetDate} 산출물로 계속 업로드하시겠습니까?`)) return;
-        response = await activityApi.importZip(classId, file, targetDate, true);
-      }
-      setResult(response.data);
-      await refresh();
-    }
-    catch (error: any) { alert(error?.response?.data?.error || '산출물을 불러오지 못했습니다.'); }
-    finally { setBusy(false); }
+    await runActivityImport({ file, selectedDate: selectedDate === 'all' ? '' : selectedDate, allowDateFolders: false });
   };
   const importFolder = async (selectedFolder?: string) => {
     if (!classId) return;
     if (isDirty) return alert('변경한 활동 기록을 먼저 저장해 주세요.');
     if (views.has('reflection') && !views.has('activity') && selectedDate !== 'all') return alert('성찰 기록 업로드는 전체 날짜 보기에서 사용할 수 있습니다.');
-    const folder = selectedFolder || await openDirectory();
-    if (folder === null) return alert('폴더 업로드는 데스크톱 앱에서 사용할 수 있습니다.');
-    if (!folder) return;
-    setBusy(true);
-    try {
-      const targetDate = selectedDate === 'all' ? '' : selectedDate;
-      let response;
-      try { response = await activityApi.importFolder(classId, folder, targetDate); }
-      catch (error: any) {
-        if (error?.response?.status !== 409 || error?.response?.data?.code !== 'DATE_FOLDERS_FOUND') throw error;
-        if (!confirm(`${error.response.data.error}\n\n날짜 폴더를 무시하고 ${targetDate} 산출물로 계속 업로드하시겠습니까?`)) return;
-        response = await activityApi.importFolder(classId, folder, targetDate, true);
-      }
-      setResult(response.data);
-      await refresh();
-    }
-    catch (error: any) { alert(error?.response?.data?.error || '산출물 폴더를 불러오지 못했습니다.'); }
-    finally { setBusy(false); }
+    const folderPath = selectedFolder || await openDirectory();
+    if (folderPath === null) return alert('폴더 업로드는 데스크톱 앱에서 사용할 수 있습니다.');
+    if (!folderPath) return;
+    await runActivityImport({ folderPath, selectedDate: selectedDate === 'all' ? '' : selectedDate, allowDateFolders: false });
   };
   const uploadStudentFiles = async (student: StudentRow, date: ActivityDate, files: File[]) => {
     const key = `${student.id}:${date.id}`;
@@ -671,6 +698,31 @@ export default function ActivityPage() {
       onReceive={receiveBatchResult}
       onClose={() => setShowBatchResults(false)}
     />}
-    {result && <BulkImportResultDialog title="산출물 업로드 결과" message={result.message} onClose={() => setResult(null)} results={(result.results || []).filter((item: any) => item.status !== 'unchanged')} stats={[{label:'전체 파일',value:result.total||0},{label:'새 파일',value:result.added||0},{label:'기존 파일 업데이트',value:result.updated||0},{label:'변경 없음',value:result.unchanged||0},{label:'연결 학생',value:result.studentCount||0},{label:'미매칭',value:result.unmatchedCount||0},{label:'날짜 칸 없음',value:result.dateMissingCount||0},{label:'충돌/오류',value:(result.conflictCount||0)+(result.errorCount||0)}]} groupLabel={(key,items) => { if (key === '연결 안 됨') return `연결 안 됨 — ${items.length}개`; const date = dates.find(item => item.activity_date === key); return `${key} · ${date?.lesson_no ?? '-'}차시 · ${date?.progress || '진도 없음'} — 새 파일 ${items.filter(item => item.status === 'added' || item.status === 'updated').length}개`; }}/>} 
+    {result && <BulkImportResultDialog
+      title={result.requiresExistingPolicy ? '산출물 매칭 결과' : '산출물 업로드 결과'}
+      message={result.message}
+      onClose={() => { setResult(null); setPendingActivityImport(null); }}
+      results={(result.results || []).filter((item: any) => result.requiresExistingPolicy || item.status !== 'unchanged')}
+      stats={result.requiresExistingPolicy ? [
+        { label: '전체 파일', value: result.total || 0 },
+        { label: '기존 산출물 칸', value: result.existingTargetCount || 0 },
+        { label: '기존 파일', value: result.existingArtifactCount || 0 },
+        { label: '바로 등록 가능', value: result.readyCount || 0 },
+        { label: '미매칭/충돌', value: (result.unmatchedCount || 0) + (result.conflictCount || 0) + (result.dateMissingCount || 0) },
+      ] : [
+        {label:'전체 파일',value:result.total||0},{label:'새 파일',value:result.added||0},{label:'기존 파일 업데이트',value:result.updated||0},{label:'변경 없음',value:result.unchanged||0},{label:'연결 학생',value:result.studentCount||0},{label:'미매칭',value:result.unmatchedCount||0},{label:'날짜 칸 없음',value:result.dateMissingCount||0},{label:'충돌/오류',value:(result.conflictCount||0)+(result.errorCount||0)}
+      ]}
+      actions={result.requiresExistingPolicy && pendingActivityImport ? bulkExistingPolicyActions.map(action => ({
+        label: action.label,
+        className: action.className,
+        onClick: () => {
+          const pending = pendingActivityImport;
+          setResult(null);
+          setPendingActivityImport(null);
+          void runActivityImport(pending, action.policy);
+        },
+      })) : undefined}
+      groupLabel={(key,items) => { if (key === '연결 안 됨') return `연결 안 됨 — ${items.length}개`; const date = dates.find(item => item.activity_date === key); return `${key} · ${date?.lesson_no ?? '-'}차시 · ${date?.progress || '진도 없음'} — 새 파일 ${items.filter(item => item.status === 'added' || item.status === 'updated').length}개`; }}
+    />}
   </PageLayout>;
 }

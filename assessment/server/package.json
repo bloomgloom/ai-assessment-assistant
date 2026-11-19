@@ -6,7 +6,7 @@
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
     "start": "node dist/index.js",
-    "test": "npm run build --silent && node dist/services/activity.test.js && node dist/services/artifactPrompt.test.js && node dist/services/artifactStorageFilename.test.js && node dist/services/excel.filename.test.js && node dist/services/llm.output-options.test.js"
+    "test": "npm run build --silent && node dist/services/activity.test.js && node dist/services/artifactEvidence.test.js && node dist/services/artifactFileResponse.test.js && node dist/services/artifactImportService.test.js && node dist/services/artifactPrompt.test.js && node dist/services/artifactStorageFilename.test.js && node dist/services/excel.filename.test.js && node dist/services/llm.output-options.test.js && node dist/services/pythonRuntime.test.js && node dist/services/serialTaskQueue.test.js"
   },
   "dependencies": {
     "@libsql/client": "^0.14.0",

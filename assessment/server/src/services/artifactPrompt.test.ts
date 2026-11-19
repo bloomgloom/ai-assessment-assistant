@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict';
-import { createArtifactPrivacyMapper, type ArtifactRow } from './artifactPrompt';
+import { createArtifactPrivacyMapper, prepareArtifactPromptContents, type ArtifactRow } from './artifactPrompt';
 
 function artifact(id: number, filename: string): ArtifactRow {
   return { id, filename, filepath: `/tmp/${filename}`, mime_type: 'text/plain' };
 }
 
-function run(): void {
+async function run(): Promise<void> {
   const csv = artifact(1, 'PC04(홍길동)_winequality-red.csv');
   const code = artifact(2, 'analysis.py');
   const mapper = createArtifactPrivacyMapper([csv, code]);
@@ -24,7 +24,16 @@ function run(): void {
     mapper.sanitizeText('다시 읽기: file_001.csv'),
     '다시 읽기: file_001.csv',
   );
+
+  const preparation = await prepareArtifactPromptContents([], [], {
+    artifactStripIntroBlocks: true,
+    artifactStripIntroBlocksDeprecated: false,
+    pdfRedactionTopCm: 0,
+  });
+  assert.deepEqual(preparation, { ok: true, hasContent: false, attachments: [] });
 }
 
-run();
-console.log('artifact prompt privacy tests passed');
+run().then(() => console.log('artifact prompt privacy tests passed')).catch(error => {
+  console.error(error);
+  process.exitCode = 1;
+});

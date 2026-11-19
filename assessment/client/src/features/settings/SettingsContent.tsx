@@ -4,6 +4,7 @@ import { ANTHROPIC_EFFORT_OPTIONS, ANTHROPIC_OUTPUT_TASKS, DEFAULT_MODELS, DEFAU
 import { useSettingsController } from './useSettingsController';
 import { AnthropicEffort, GeminiThinkingLevel, OpenAIReasoningEffort, SettingsTab } from './types';
 import { hasDesktopFileDialogs, openFiles } from '../../lib/desktopFiles';
+import { PythonEnvironmentSettings } from './PythonEnvironmentSettings';
 
 interface SettingsContentProps extends ReturnType<typeof useSettingsController> {
   activeTab: SettingsTab;
@@ -634,6 +635,8 @@ export function SettingsContent({
       </div>
       </div>
       )}
+
+      {activeTab === 'python' && <PythonEnvironmentSettings />}
 
       {activeTab === 'assignment' && (
       <div className="space-y-6">

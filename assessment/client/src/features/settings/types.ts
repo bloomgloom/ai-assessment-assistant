@@ -1,4 +1,4 @@
-export type SettingsTab = 'ai' | 'assignment' | 'data';
+export type SettingsTab = 'ai' | 'python' | 'assignment' | 'data';
 
 export interface AiTemperatures {
   domainManagement: number;

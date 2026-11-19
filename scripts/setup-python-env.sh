@@ -38,7 +38,6 @@ esac
 
 rm -rf "$BUILD_VENV_DIR" 2>/dev/null || true
 "$PYTHON_BIN" -m venv "$BUILD_VENV_DIR"
-"$BUILD_VENV_DIR/bin/python3" -m pip install --upgrade pip
 "$BUILD_VENV_DIR/bin/python3" -m pip install -r "$PYTHON_DIR/requirements.txt"
 
 if [[ -e "$VENV_DIR" ]]; then
@@ -52,4 +51,4 @@ if [[ -e "$OLD_VENV_DIR" ]]; then
   }
 fi
 
-echo "Python evidence environment ready: $VENV_DIR"
+echo "Python bootstrap environment ready: $VENV_DIR"

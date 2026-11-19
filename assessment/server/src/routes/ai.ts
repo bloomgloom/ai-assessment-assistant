@@ -19,7 +19,7 @@ import {
 } from '../services/llm';
 import { assignmentArtifactsForStudent } from '../services/assignmentArtifacts';
 import { parseFirstJson } from '../services/json';
-import { appendArtifactContents, type ArtifactRow } from '../services/artifactPrompt';
+import { prepareArtifactPromptContents, type ArtifactRow } from '../services/artifactPrompt';
 
 const router = Router();
 const SUBJECT_COMPREHENSIVE_DOMAIN = '__SUBJECT_COMPREHENSIVE__';
@@ -789,8 +789,18 @@ async function prepareGenerationForStudent(params: {
 
   if (!cachePrefix) cachePrefix = parts.length > 0 ? parts.join('\n\n') : undefined;
   parts.push(...studentSpecificParts);
-  const attachments: LLMImageAttachment[] = [];
-  const hasContent = await appendArtifactContents(parts, artifacts, settings, attachments);
+  const artifactPreparation = await prepareArtifactPromptContents(parts, artifacts, settings);
+  if (!artifactPreparation.ok) {
+    return {
+      studentId: student.id,
+      prompt: '',
+      attachments: [],
+      evalCriteria,
+      commentsCriteria,
+      error: artifactPreparation.error,
+    };
+  }
+  const { hasContent, attachments } = artifactPreparation;
 
   if (!hasContent && artifacts.length === 0 && contentType === 'scoring') {
     return { studentId: student.id, prompt: '', attachments, evalCriteria, commentsCriteria, defaultContent: buildDefaultScoringContent(evalCriteria) };
@@ -835,8 +845,18 @@ async function prepareCombinedGenerationForStudent(params: {
   const cachePrefix = parts.join('\n\n');
 
   const artifacts = await assignmentArtifactsForStudent(student.id, domain) as ArtifactRow[];
-  const attachments: LLMImageAttachment[] = [];
-  const hasContent = await appendArtifactContents(parts, artifacts, settings, attachments);
+  const artifactPreparation = await prepareArtifactPromptContents(parts, artifacts, settings);
+  if (!artifactPreparation.ok) {
+    return {
+      studentId: student.id,
+      prompt: '',
+      attachments: [],
+      evalCriteria,
+      commentsCriteria,
+      error: artifactPreparation.error,
+    };
+  }
+  const { hasContent, attachments } = artifactPreparation;
   if (!hasContent && artifacts.length === 0) {
     return { studentId: student.id, prompt: '', attachments, evalCriteria, commentsCriteria, defaultContent: buildDefaultScoringContent(evalCriteria), error: '산출물 없음' };
   }
@@ -891,6 +911,7 @@ router.post('/generate-claude-batch', async (req: Request, res: Response) => {
   const { classId, domain, contentType, criteriaSetId, studentIds } = req.body as BatchGenerateRequest;
   if (classId === undefined) return res.status(400).json({ error: 'classId가 필요합니다.' });
 
+  let streamStarted = false;
   try {
     const settings = await getLLMSettings();
     if (settings.provider !== 'anthropic') return res.status(400).json({ error: 'Claude 공급자에서만 배치 요청을 사용할 수 있습니다.' });
@@ -901,6 +922,14 @@ router.post('/generate-claude-batch', async (req: Request, res: Response) => {
           [...studentIds, classId]
         )
       : await queryAll<{ id: number; name: string }>('SELECT * FROM class_students WHERE class_id=? ORDER BY student_num', [classId]);
+    res.status(200);
+    res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-cache, no-transform');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no');
+    res.flushHeaders();
+    streamStarted = true;
+    const sendEvent = (event: Record<string, unknown>) => res.write(`data: ${JSON.stringify(event)}\n\n`);
     const classContext = await getClassContextByClass(classId);
     const requests: AnthropicBatchRequest[] = [];
     const requestMeta: Array<{ customId: string; studentId: number; studentName: string }> = [];
@@ -913,7 +942,10 @@ router.post('/generate-claude-batch', async (req: Request, res: Response) => {
       if (prepared.defaultContent || prepared.error) {
         if (contentType === 'combined') {
           if (prepared.defaultContent) immediateUpdates.push({ studentId: student.id, contentType: 'scoring', domain, content: prepared.defaultContent });
-          if (prepared.error) immediateUpdates.push({ studentId: student.id, contentType: 'comments', domain, error: prepared.error });
+          if (prepared.error) {
+            if (!prepared.defaultContent) immediateUpdates.push({ studentId: student.id, contentType: 'scoring', domain, error: prepared.error });
+            immediateUpdates.push({ studentId: student.id, contentType: 'comments', domain, error: prepared.error });
+          }
         } else {
           immediateUpdates.push({
             studentId: student.id,
@@ -923,26 +955,26 @@ router.post('/generate-claude-batch', async (req: Request, res: Response) => {
             error: prepared.error,
           });
         }
-        continue;
+      } else {
+        const customId = claudeBatchCustomId(student.id, domain, index);
+        const temperature = contentType === 'scoring'
+          ? settings.temperatures.recordsScoring
+          : settings.temperatures.recordsComments;
+        requests.push({
+          custom_id: customId,
+          params: buildAnthropicMessageParams(
+            prepared.prompt,
+            settings,
+            prepared.attachments,
+            temperature,
+            prepared.cachePrefix,
+            schemaForGeneration(contentType, domain, prepared.evalCriteria, prepared.commentsCriteria),
+            anthropicTaskForGeneration(contentType, domain)
+          ),
+        });
+        requestMeta.push({ customId, studentId: student.id, studentName: student.name });
       }
-
-      const customId = claudeBatchCustomId(student.id, domain, index);
-      const temperature = contentType === 'scoring'
-        ? settings.temperatures.recordsScoring
-        : settings.temperatures.recordsComments;
-      requests.push({
-        custom_id: customId,
-        params: buildAnthropicMessageParams(
-          prepared.prompt,
-          settings,
-          prepared.attachments,
-          temperature,
-          prepared.cachePrefix,
-          schemaForGeneration(contentType, domain, prepared.evalCriteria, prepared.commentsCriteria),
-          anthropicTaskForGeneration(contentType, domain)
-        ),
-      });
-      requestMeta.push({ customId, studentId: student.id, studentName: student.name });
+      sendEvent({ type: 'preparing', completed: index + 1, total: students.length, name: student.name });
     }
 
     let providerBatchId = `local_${Date.now()}`;
@@ -961,15 +993,23 @@ router.post('/generate-claude-batch', async (req: Request, res: Response) => {
       [providerBatchId, classId, domain, contentType, status, requests.length, JSON.stringify({ requests: requestMeta, immediateUpdates })]
     );
 
-    res.json({
+    sendEvent({
+      type: 'submitted',
       ok: true,
       batchId: providerBatchId,
       status,
       requestCount: requests.length,
       immediateUpdates,
     });
+    res.end();
   } catch (e: unknown) {
-    res.status(batchCreateErrorStatus(e)).json({ error: e instanceof Error ? e.message : String(e) });
+    const error = e instanceof Error ? e.message : String(e);
+    if (streamStarted) {
+      res.write(`data: ${JSON.stringify({ type: 'fatal', error })}\n\n`);
+      res.end();
+    } else {
+      res.status(batchCreateErrorStatus(e)).json({ error });
+    }
   }
 });
 
@@ -1065,7 +1105,7 @@ router.get('/claude-batch-jobs', async (req: Request, res: Response) => {
     const jobs = rows.map((row) => {
       const metadata = JSON.parse(row.metadata || '{}') as {
         requests?: Array<{ studentId: number; activityDateId?: number; mode?: 'date' | 'semester' }>;
-        immediateUpdates?: Array<{ studentId: number }>;
+        immediateUpdates?: Array<{ studentId: number; domain?: string; activityDateId?: number; mode?: 'date' | 'semester' }>;
       };
       const studentIds = Array.from(new Set([
         ...(metadata.requests || []).map((item) => item.studentId),
@@ -1073,8 +1113,12 @@ router.get('/claude-batch-jobs', async (req: Request, res: Response) => {
       ].filter((id): id is number => Number.isFinite(id))));
       const activityLockMap = new Map<string, number[]>();
       if (row.content_type === 'activity') {
-        for (const request of metadata.requests || []) {
-          const domain = request.mode === 'semester' ? '__ACTIVITY_SEMESTER__' : String(request.activityDateId || '');
+        const activityItems: Array<{ studentId: number; domain?: string; activityDateId?: number; mode?: 'date' | 'semester' }> = [
+          ...(metadata.requests || []),
+          ...(metadata.immediateUpdates || []),
+        ];
+        for (const request of activityItems) {
+          const domain = request.domain || (request.mode === 'semester' ? '__ACTIVITY_SEMESTER__' : String(request.activityDateId || ''));
           if (!domain) continue;
           const ids = activityLockMap.get(domain) || [];
           if (!ids.includes(request.studentId)) ids.push(request.studentId);
@@ -1126,7 +1170,7 @@ router.post('/claude-batch-results', async (req: Request, res: Response) => {
       checked++;
       const metadata = JSON.parse(job.metadata || '{}') as {
         requests?: Array<{ customId: string; studentId: number; studentName: string; activityDateId?: number; fileIds?: number[]; mode?: 'date' | 'semester' }>;
-        immediateUpdates?: Array<{ studentId: number; contentType: 'scoring' | 'comments'; domain: string; content?: string; error?: string }>;
+        immediateUpdates?: Array<{ studentId: number; contentType: 'scoring' | 'comments' | 'activity'; domain: string; content?: string; error?: string; activityDateId?: number; mode?: 'date' | 'semester' }>;
       };
 
       if (job.provider_batch_id.startsWith('local_')) {

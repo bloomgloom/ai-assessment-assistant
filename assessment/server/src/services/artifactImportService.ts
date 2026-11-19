@@ -1,7 +1,7 @@
 import { entryFilename, type ImportEntry } from './importEntries';
 import { matchStudentsByPath, type MatchableStudent } from './studentMatcher';
 
-export type ArtifactImportStatus = 'uploaded' | 'added' | 'updated' | 'unchanged' | 'reflection' | 'unmatched' | 'conflict' | 'date_missing' | 'read_error';
+export type ArtifactImportStatus = 'uploaded' | 'added' | 'updated' | 'unchanged' | 'reflection' | 'unmatched' | 'conflict' | 'date_missing' | 'read_error' | 'existing' | 'ready';
 
 export interface ArtifactImportResult {
   path: string;
@@ -38,6 +38,34 @@ export interface ArtifactImportSummary {
   total: number;
   matchedStudentIds: Set<number>;
   results: ArtifactImportResult[];
+}
+
+export type BulkExistingPolicy = 'skip' | 'replace' | 'append';
+
+export function parseBulkExistingPolicy(value: unknown): BulkExistingPolicy | null {
+  const policy = String(value || '');
+  return policy === 'skip' || policy === 'replace' || policy === 'append' ? policy : null;
+}
+
+export interface ArtifactImportPreflightMatch<TStudent extends MatchableStudent> {
+  path: string;
+  filename: string;
+  matches: TStudent[];
+}
+
+export function preflightArtifactImports<TStudent extends MatchableStudent>(
+  entries: ImportEntry[],
+  students: TStudent[],
+  include?: (entry: ImportEntry, filename: string) => boolean,
+): ArtifactImportPreflightMatch<TStudent>[] {
+  const matches: ArtifactImportPreflightMatch<TStudent>[] = [];
+  for (const entry of entries) {
+    const filename = entryFilename(entry);
+    if (!filename || include?.(entry, filename) === false) continue;
+    const importPath = normalizedImportPath(entry);
+    matches.push({ path: importPath, filename, matches: matchStudentsByPath(importPath, students) });
+  }
+  return matches;
 }
 
 export function normalizedImportPath(entry: ImportEntry): string {

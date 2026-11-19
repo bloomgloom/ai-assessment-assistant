@@ -3,17 +3,18 @@ import fs from 'fs';
 import path from 'path';
 import multer from 'multer';
 import { execute, queryAll, queryOne, transaction } from '../services/db';
-import { UPLOADS_DIR, ensureDir, resolveStoredPath, toStoredPath } from '../services/storage';
+import { UPLOADS_DIR, ensureDir, moveFileToTrash, resolveStoredPath, restoreTrashedFile, toStoredPath } from '../services/storage';
 import { entriesFromImportSource } from '../services/importEntries';
-import { ArtifactImportService, type ArtifactImportResult } from '../services/artifactImportService';
+import { ArtifactImportService, parseBulkExistingPolicy, preflightArtifactImports, type ArtifactImportResult } from '../services/artifactImportService';
 import { WorkbookGateway } from '../services/lessonPlanExcel';
-import { appendArtifactContents, type ArtifactRow } from '../services/artifactPrompt';
+import { prepareArtifactPromptContents, type ArtifactRow } from '../services/artifactPrompt';
 import { buildAnthropicMessageParams, callLLM, createAnthropicMessageBatch, getLLMSettings, type AnthropicBatchRequest } from '../services/llm';
 import { decodeUploadFilename } from '../services/filename';
 import { parseActivityReflectionCsv } from '../services/activityReflectionCsv';
 import { activityDateFromPath, importDateFolders, isReflectionImportPath } from '../services/activityImportPaths';
 import { activityFilenameDecision, nextActivityLessonNo } from '../services/activityRules';
 import { parseFirstJson } from '../services/json';
+import { artifactContentType, sendArtifactFile } from '../services/artifactFileResponse';
 
 const router = Router();
 const TEMP_DIR = path.join(UPLOADS_DIR, 'temp');
@@ -39,11 +40,7 @@ function safeSegment(value: string): string {
 }
 
 function mimeType(filename: string): string {
-  const ext = path.extname(filename).toLowerCase();
-  return ({ '.txt': 'text/plain; charset=utf-8', '.md': 'text/markdown; charset=utf-8',
-    '.csv': 'text/csv; charset=utf-8', '.json': 'application/json; charset=utf-8',
-    '.ipynb': 'application/x-ipynb+json; charset=utf-8', '.py': 'text/x-python; charset=utf-8',
-    '.pdf': 'application/pdf', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg' } as Record<string, string>)[ext] || 'application/octet-stream';
+  return artifactContentType(filename);
 }
 
 async function classById(classId: string | number): Promise<ClassRow | null> {
@@ -391,29 +388,88 @@ router.post('/:classId/import', upload.single('file'), async (req: Request, res:
     const students = await queryAll<StudentRow>('SELECT id,student_num,name FROM class_students WHERE class_id=?', [cls.id]);
     const dateRows = await queryAll<{ id: number; activity_date: string }>("SELECT id,activity_date FROM activity_dates WHERE class_id=? AND source_mode!='excel_deleted'", [cls.id]);
     const dateMap = new Map(dateRows.map(row => [row.activity_date, row.id]));
+    const includeEntry = (entry: { relativePath: string }, filename: string) => {
+      if (filename.startsWith('_')) return false;
+      const reflection = isReflectionImportPath(entry.relativePath);
+      if (selectedDate) return !reflection;
+      if (reflection) return path.extname(filename).toLowerCase() === '.csv';
+      return !!activityDateFromPath(entry.relativePath);
+    };
+    const artifactPreflight = preflightArtifactImports(
+      entries,
+      students,
+      (entry, filename) => includeEntry(entry, filename) && !isReflectionImportPath(entry.relativePath),
+    );
+    const targetKey = (studentId: number, dateId: number) => `${studentId}:${dateId}`;
+    const preflightTargets = artifactPreflight.flatMap(item => {
+      if (item.matches.length !== 1) return [];
+      const activityDate = selectedDate || activityDateFromPath(item.path);
+      const dateId = dateMap.get(activityDate);
+      return dateId ? [{ ...item, student: item.matches[0], activityDate, dateId }] : [];
+    });
+    const targetKeys = new Set(preflightTargets.map(item => targetKey(item.student.id, item.dateId)));
+    const existingRows = await queryAll<{ id: number; student_id: number; activity_date_id: number; filepath: string }>(
+      `SELECT f.id,f.student_id,f.activity_date_id,f.filepath
+       FROM activity_files f JOIN activity_dates d ON d.id=f.activity_date_id
+       WHERE d.class_id=?`,
+      [cls.id],
+    );
+    const existing = existingRows.filter(item => targetKeys.has(targetKey(item.student_id, item.activity_date_id)));
+    const existingCellKeys = new Set(existing.map(item => targetKey(item.student_id, item.activity_date_id)));
+    const existingPolicy = parseBulkExistingPolicy(req.body.existingPolicy);
+    if (existing.length && !existingPolicy) {
+      const results = artifactPreflight.map(item => {
+        if (item.matches.length === 0) return { path: item.path, filename: item.filename, status: 'unmatched', reason: '경로에서 학번·이름을 찾지 못했습니다.' };
+        if (item.matches.length > 1) return { path: item.path, filename: item.filename, status: 'conflict', reason: `여러 학생과 일치: ${item.matches.map(student => `${student.student_num}${student.name}`).join(', ')}` };
+        const student = item.matches[0];
+        const activityDate = selectedDate || activityDateFromPath(item.path);
+        const dateId = dateMap.get(activityDate);
+        if (!dateId) return { path: item.path, filename: item.filename, status: 'date_missing', ...resultStudent(student), date: activityDate, reason: '날짜 칸 없음' };
+        const count = existing.filter(existingItem => existingItem.student_id === student.id && existingItem.activity_date_id === dateId).length;
+        return {
+          path: item.path,
+          filename: item.filename,
+          status: count ? 'existing' : 'ready',
+          ...resultStudent(student),
+          date: activityDate,
+          reason: count ? `해당 활동 칸에 기존 산출물 ${count}개가 있습니다.` : '등록할 수 있습니다.',
+        };
+      });
+      return res.status(409).json({
+        conflict: 'existing_artifacts',
+        message: `기존 산출물이 있는 활동 칸 ${existingCellKeys.size}개가 발견되었습니다. 처리 방법을 선택하세요.`,
+        total: artifactPreflight.length,
+        existingTargetCount: existingCellKeys.size,
+        existingArtifactCount: existing.length,
+        readyCount: results.filter(item => item.status === 'ready').length,
+        unmatchedCount: results.filter(item => item.status === 'unmatched').length,
+        conflictCount: results.filter(item => item.status === 'conflict').length,
+        dateMissingCount: results.filter(item => item.status === 'date_missing').length,
+        results,
+      });
+    }
     type ActivityTarget =
       | { kind: 'reflection' }
       | { kind: 'artifact'; activityDate: string; dateId: number; original: string; previous: boolean };
     let reflections = 0;
+    const newPaths: string[] = [];
     const importer = new ArtifactImportService<StudentRow, ActivityTarget>(students, {
-      include: (entry, filename) => {
-        if (filename.startsWith('_')) return false;
-        const reflection = isReflectionImportPath(entry.relativePath);
-        if (selectedDate) return !reflection;
-        if (reflection) return path.extname(filename).toLowerCase() === '.csv';
-        return !!activityDateFromPath(entry.relativePath);
-      },
+      include: includeEntry,
       studentResult: resultStudent,
       resolve: async context => {
         if (isReflectionImportPath(context.path)) return { kind: 'read', target: { kind: 'reflection' } };
         const activityDate = selectedDate || activityDateFromPath(context.path);
         const dateId = dateMap.get(activityDate);
         if (!dateId) return { kind: 'result', result: { path: context.path, status: 'date_missing', ...resultStudent(context.student), date: activityDate, reason: '날짜 칸 없음' } };
+        const cellHasExisting = existingCellKeys.has(targetKey(context.student.id, dateId));
+        if (existingPolicy === 'skip' && cellHasExisting) {
+          return { kind: 'result', result: { path: context.path, status: 'unchanged', ...resultStudent(context.student), date: activityDate, filename: context.filename, reason: '기존 산출물을 유지하고 새 파일을 건너뛰었습니다.' } };
+        }
         const same = await queryOne<{ id: number }>('SELECT id FROM activity_files WHERE student_id=? AND activity_date_id=? AND filename=?', [context.student.id, dateId, context.filename]);
-        if (same) return { kind: 'result', result: { path: context.path, status: 'unchanged', ...resultStudent(context.student), date: activityDate, filename: context.filename } };
+        if (same && !existingPolicy) return { kind: 'result', result: { path: context.path, status: 'unchanged', ...resultStudent(context.student), date: activityDate, filename: context.filename } };
         const original = originalFilename(context.filename);
         const previous = !!await queryOne<{ id: number }>('SELECT id FROM activity_files WHERE student_id=? AND activity_date_id=? AND original_filename=? LIMIT 1', [context.student.id, dateId, original]);
-        return { kind: 'read', target: { kind: 'artifact', activityDate, dateId, original, previous } };
+        return { kind: 'read', target: { kind: 'artifact', activityDate, dateId, original, previous: existingPolicy === 'replace' ? cellHasExisting : previous && existingPolicy !== 'append' } };
       },
       store: async context => {
         if (context.target.kind === 'reflection') {
@@ -425,15 +481,47 @@ router.post('/:classId/import', upload.single('file'), async (req: Request, res:
         ensureDir(targetDir);
         const targetPath = path.join(targetDir, `${Date.now()}_${Math.random().toString(36).slice(2, 8)}_${safeSegment(context.filename)}`);
         fs.writeFileSync(targetPath, context.buffer);
-        await execute(
-          `INSERT INTO activity_files(student_id,activity_date_id,filename,original_filename,filepath,mime_type,size)
-           VALUES(?,?,?,?,?,?,?)`,
-          [context.student.id, context.target.dateId, context.filename, context.target.original, toStoredPath(targetPath), mimeType(context.filename), context.buffer.length]
-        );
+        try {
+          await execute(
+            `INSERT INTO activity_files(student_id,activity_date_id,filename,original_filename,filepath,mime_type,size)
+             VALUES(?,?,?,?,?,?,?)`,
+            [context.student.id, context.target.dateId, context.filename, context.target.original, toStoredPath(targetPath), mimeType(context.filename), context.buffer.length]
+          );
+        } catch (error) {
+          try { fs.unlinkSync(targetPath); } catch {}
+          throw error;
+        }
+        newPaths.push(targetPath);
         return { path: context.path, status: context.target.previous ? 'updated' : 'added', ...resultStudent(context.student), date: context.target.activityDate, filename: context.filename };
       },
     });
-    const imported = await importer.run(entries);
+    const movedFiles: Array<{ trashPath: string; originalFilepath: string }> = [];
+    let imported;
+    if (existingPolicy === 'replace' && existing.length) {
+      try {
+        imported = await transaction(async () => {
+          const result = await importer.run(entries);
+          const failed = result.results.find(item => item.status === 'read_error');
+          if (failed) throw new Error(failed.reason || '새 산출물 파일을 저장하지 못했습니다.');
+          for (const item of existing) {
+            const trashPath = moveFileToTrash(item.filepath, 'bulk-replaced-activity-artifacts');
+            if (trashPath) movedFiles.push({ trashPath, originalFilepath: item.filepath });
+          }
+          await execute(`DELETE FROM activity_files WHERE id IN (${existing.map(() => '?').join(',')})`, existing.map(item => item.id));
+          return result;
+        });
+      } catch (error) {
+        for (const newPath of newPaths) {
+          try { if (fs.existsSync(newPath)) fs.unlinkSync(newPath); } catch {}
+        }
+        for (const moved of movedFiles.reverse()) {
+          try { restoreTrashedFile(moved.trashPath, moved.originalFilepath); } catch {}
+        }
+        throw error;
+      }
+    } else {
+      imported = await importer.run(entries);
+    }
     const results: ArtifactImportResult[] = imported.results;
     const added = results.filter(result => result.status === 'added').length;
     const updated = results.filter(result => result.status === 'updated').length;
@@ -495,6 +583,7 @@ router.post('/:classId/generate', async (req, res) => {
     res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
     res.setHeader('Cache-Control', 'no-cache, no-transform');
     res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no');
     res.flushHeaders();
     streamStarted = true;
     const sendEvent = (event: Record<string, unknown>) => res.write(`data: ${JSON.stringify(event)}\n\n`);
@@ -547,7 +636,9 @@ router.post('/:classId/generate', async (req, res) => {
             if (filepath) artifacts.unshift({ id: -(sourceIndex + 1), filename, filepath, mime_type: mimeType(filename) });
             else parts.push(`[원본 파일 누락]\n${filename}`);
           }
-          await appendArtifactContents(parts, artifacts, llmSettings, attachments);
+          const artifactPreparation = await prepareArtifactPromptContents(parts, artifacts, llmSettings);
+          if (!artifactPreparation.ok) throw new Error(artifactPreparation.error);
+          attachments.push(...artifactPreparation.attachments);
           parts.push('학생 파일 전체를 바탕으로 이번 차시 활동을 요약한다. 다시 제출한 내용이 있으면 달라진 점을 먼저 쓴다.');
         }
         const prompt = sanitizeStudentText(parts.join('\n\n---\n\n'), student);
@@ -575,6 +666,7 @@ router.post('/:classId/generate', async (req, res) => {
 });
 
 router.post('/:classId/batch', async (req, res) => {
+  let streamStarted = false;
   try {
     const cls = await classById(req.params.classId);
     if (!cls) return res.status(404).json({ error: '수업을 찾을 수 없습니다.' });
@@ -594,17 +686,38 @@ router.post('/:classId/batch', async (req, res) => {
              WHERE cs.class_id=? AND d.source_mode!='excel_deleted' AND COALESCE(f.summarized_at,'')='' AND COALESCE(s.manually_edited,0)=0`,
             [cls.id]
           );
+    res.status(200);
+    res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-cache, no-transform');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no');
+    res.flushHeaders();
+    streamStarted = true;
+    const sendEvent = (event: Record<string, unknown>) => res.write(`data: ${JSON.stringify(event)}\n\n`);
     const subjectSettings = await planSettings(cls) || {};
     const requests: AnthropicBatchRequest[] = [];
     const requestMeta: any[] = [];
+    const immediateUpdates: Array<{
+      studentId: number;
+      contentType: 'activity';
+      domain: string;
+      error: string;
+      activityDateId?: number;
+      mode: 'date' | 'semester';
+    }> = [];
     for (const [index, target] of targets.entries()) {
       const student = await queryOne<any>('SELECT id,student_num,name,personal_num FROM class_students WHERE id=? AND class_id=?', [target.student_id, cls.id]);
-      if (!student) continue;
-      let parts: string[] = [];
-      let artifacts: ArtifactRow[] = [];
-      let fileIds: number[] = [];
-      let activityDateId: number | undefined;
-      if (mode === 'semester') {
+      if (!student) {
+        sendEvent({ type: 'preparing', completed: index + 1, total: targets.length, name: '학생 정보 없음' });
+        continue;
+      }
+      const activityDateId = mode === 'date' ? Number(target.activity_date_id) : undefined;
+      const resultDomain = mode === 'semester' ? '__ACTIVITY_SEMESTER__' : String(activityDateId || '');
+      try {
+        let parts: string[] = [];
+        let artifacts: ArtifactRow[] = [];
+        let fileIds: number[] = [];
+        if (mode === 'semester') {
         const records = await queryAll<any>(
           `SELECT d.activity_date,d.lesson_no,d.progress,COALESCE(s.summary,'') AS summary,
              COALESCE(o.is_absent,0) AS is_absent,COALESCE(o.note,'') AS observation,
@@ -616,13 +729,13 @@ router.post('/:classId/batch', async (req, res) => {
            WHERE d.class_id=? AND d.source_mode!='excel_deleted' ORDER BY d.activity_date`,
           [student.id, student.id, student.id, cls.id]
         );
-        if (!records.some(row => row.summary || row.observation || row.is_absent || row.plus_text || row.minus_text || row.interesting_text)) continue;
+        if (!records.some(row => row.summary || row.observation || row.is_absent || row.plus_text || row.minus_text || row.interesting_text)) throw new Error('종합할 활동 기록이 없습니다.');
         parts = [`[지시]\n${subjectSettings.comprehensive_prompt || '학생의 학기 전체 활동 요약, 관찰, 성찰에서 반복되는 관심, 시도, 변화와 구체적 사실을 간결하게 종합한다. 학생 이름과 평가·점수는 쓰지 않는다.'}`,
           `[학기 활동 기록]\n${records.map(row => `${row.activity_date} ${row.lesson_no}차시 ${row.progress}\n활동: ${row.summary}\n관찰: ${row.is_absent ? '결석' : row.observation}\n성찰: Plus ${row.plus_text} / Minus ${row.minus_text} / Interesting ${row.interesting_text}`).join('\n\n')}`];
-      } else {
-        activityDateId = Number(target.activity_date_id);
-        const date = await queryOne<any>("SELECT * FROM activity_dates WHERE id=? AND class_id=? AND source_mode!='excel_deleted'", [activityDateId, cls.id]);
-        if (!date) continue;
+        } else {
+        const dateId = Number(activityDateId);
+        const date = await queryOne<any>("SELECT * FROM activity_dates WHERE id=? AND class_id=? AND source_mode!='excel_deleted'", [dateId, cls.id]);
+        if (!date) throw new Error('수업 날짜를 찾을 수 없습니다.');
         let plan: any = await queryOne<any>(
           'SELECT * FROM lesson_plans WHERE year=? AND semester=? AND grade=? AND subject=? AND lesson_no=? ORDER BY sort_order LIMIT 1',
           [cls.year, cls.semester, cls.grade, cls.subject, date.lesson_no]
@@ -634,8 +747,8 @@ router.post('/:classId/batch', async (req, res) => {
         }
         const kindPrompt = plan?.kind === '실습' ? subjectSettings.practice_prompt : plan?.kind === '탐구' ? subjectSettings.inquiry_prompt : plan?.kind === '개념' ? subjectSettings.concept_prompt : subjectSettings.other_prompt;
         parts = [subjectSettings.common_prompt || '제출물에 있는 사실만 쓴다. 학생 이름을 쓰지 않는다. 한국어로 쓴다.', kindPrompt || '', plan?.prompt ? `[차시 추가 요청]\n${plan.prompt}` : '', `[차시]\n${date.lesson_no}차시\n진도: ${date.progress}\n내용: ${plan?.content || ''}`].filter(Boolean);
-        const files = await queryAll<any>('SELECT id,filename,filepath,mime_type FROM activity_files WHERE student_id=? AND activity_date_id=? ORDER BY uploaded_at,id', [student.id, activityDateId]);
-        if (!files.length) continue;
+        const files = await queryAll<any>('SELECT id,filename,filepath,mime_type FROM activity_files WHERE student_id=? AND activity_date_id=? ORDER BY uploaded_at,id', [student.id, dateId]);
+        if (!files.length) throw new Error('학생 산출물이 없습니다.');
         fileIds = files.map(file => Number(file.id));
         artifacts = files.map(file => ({ id: file.id, filename: file.filename, filepath: file.filepath, mime_type: file.mime_type }));
         const sourceFiles = String(plan?.source_files || '').split(',').map(value => value.trim()).filter(Boolean);
@@ -644,27 +757,52 @@ router.post('/:classId/batch', async (req, res) => {
           if (filepath) artifacts.unshift({ id: -(sourceIndex + 1), filename, filepath, mime_type: mimeType(filename) });
           else parts.push(`[원본 파일 누락]\n${filename}`);
         }
-        const attachments: any[] = [];
-        await appendArtifactContents(parts, artifacts, llmSettings, attachments);
-        (target as any)._attachments = attachments;
+        const artifactPreparation = await prepareArtifactPromptContents(parts, artifacts, llmSettings);
+        if (!artifactPreparation.ok) throw new Error(artifactPreparation.error);
+        (target as any)._attachments = artifactPreparation.attachments;
+        }
+        parts.push(mode === 'semester' ? '위 기록을 바탕으로 학기 활동 종합을 작성한다.' : '학생 파일 전체를 바탕으로 이번 차시 활동을 요약한다. 다시 제출한 내용이 있으면 달라진 점을 먼저 쓴다.');
+        const prompt = sanitizeStudentText(parts.join('\n\n---\n\n'), student);
+        const customId = `activity_${student.id}_${mode}_${activityDateId || 0}_${index}`;
+        requests.push({ custom_id: customId, params: buildAnthropicMessageParams(prompt, llmSettings, (target as any)._attachments || [], llmSettings.temperatures.recordsComments, undefined, {
+          type: 'object', properties: { summary: { type: 'string' } }, required: ['summary'], additionalProperties: false,
+        }, mode === 'semester' ? 'activityComprehensive' : 'activity') });
+        requestMeta.push({ customId, studentId: student.id, studentName: student.name, activityDateId, fileIds, mode });
+      } catch (error) {
+        immediateUpdates.push({
+          studentId: student.id,
+          contentType: 'activity',
+          domain: resultDomain,
+          error: error instanceof Error ? error.message : String(error),
+          activityDateId,
+          mode,
+        });
       }
-      parts.push(mode === 'semester' ? '위 기록을 바탕으로 학기 활동 종합을 작성한다.' : '학생 파일 전체를 바탕으로 이번 차시 활동을 요약한다. 다시 제출한 내용이 있으면 달라진 점을 먼저 쓴다.');
-      const prompt = sanitizeStudentText(parts.join('\n\n---\n\n'), student);
-      const customId = `activity_${student.id}_${mode}_${activityDateId || 0}_${index}`;
-      requests.push({ custom_id: customId, params: buildAnthropicMessageParams(prompt, llmSettings, (target as any)._attachments || [], llmSettings.temperatures.recordsComments, undefined, {
-        type: 'object', properties: { summary: { type: 'string' } }, required: ['summary'], additionalProperties: false,
-      }, mode === 'semester' ? 'activityComprehensive' : 'activity') });
-      requestMeta.push({ customId, studentId: student.id, studentName: student.name, activityDateId, fileIds, mode });
+      sendEvent({ type: 'preparing', completed: index + 1, total: targets.length, name: student.name });
     }
-    if (!requests.length) return res.json({ ok: true, batchId: '', status: 'ended', requestCount: 0 });
-    const batch = await createAnthropicMessageBatch(llmSettings, requests);
+    let providerBatchId = `local_activity_${Date.now()}`;
+    let status = 'in_progress';
+    if (requests.length) {
+      const batch = await createAnthropicMessageBatch(llmSettings, requests);
+      providerBatchId = batch.id;
+      status = batch.processing_status || 'in_progress';
+    }
     await execute(
       `INSERT INTO ai_batch_jobs(provider_batch_id,class_id,domain,content_type,status,request_count,metadata,updated_at)
        VALUES(?,?,?,'activity',?,?,?,datetime('now'))`,
-      [batch.id, cls.id, mode === 'semester' ? '__ACTIVITY_SEMESTER__' : '__ACTIVITY__', batch.processing_status || 'in_progress', requests.length, JSON.stringify({ requests: requestMeta })]
+      [providerBatchId, cls.id, mode === 'semester' ? '__ACTIVITY_SEMESTER__' : '__ACTIVITY__', status, targets.length, JSON.stringify({ requests: requestMeta, immediateUpdates })]
     );
-    res.json({ ok: true, batchId: batch.id, status: batch.processing_status || 'in_progress', requestCount: requests.length });
-  } catch (error) { res.status(500).json({ error: error instanceof Error ? error.message : String(error) }); }
+    sendEvent({ type: 'submitted', ok: true, batchId: providerBatchId, status, requestCount: targets.length, immediateUpdates });
+    res.end();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (streamStarted) {
+      res.write(`data: ${JSON.stringify({ type: 'fatal', error: message })}\n\n`);
+      res.end();
+    } else {
+      res.status(500).json({ error: message });
+    }
+  }
 });
 
 router.get('/:classId/pending', async (req, res) => {
@@ -690,11 +828,8 @@ router.get('/:classId/semester-summaries', async (req, res) => {
 
 router.get('/files/:id', async (req, res) => {
   const file = await queryOne<{ filename: string; filepath: string; mime_type: string }>('SELECT filename,filepath,mime_type FROM activity_files WHERE id=?', [req.params.id]);
-  const filepath = file ? resolveStoredPath(file.filepath) : '';
-  if (!file || !fs.existsSync(filepath)) return res.status(404).json({ error: '파일을 찾을 수 없습니다.' });
-  res.setHeader('Content-Type', file.mime_type || 'application/octet-stream');
-  res.setHeader('Content-Disposition', `inline; filename*=UTF-8''${encodeURIComponent(file.filename)}`);
-  res.sendFile(path.resolve(filepath));
+  if (!file) return res.status(404).json({ error: '파일을 찾을 수 없습니다.' });
+  sendArtifactFile(res, file);
 });
 
 export default router;

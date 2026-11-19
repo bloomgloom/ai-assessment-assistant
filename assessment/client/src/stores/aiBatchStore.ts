@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { activityApi, aiApi, claudeBatchApi } from '../lib/api';
+import { aiApi, claudeBatchApi } from '../lib/api';
 import { startDisplaySleepPrevention, stopDisplaySleepPrevention } from '../lib/displaySleepPrevention';
 
 export type BatchContentType = 'scoring' | 'comments' | 'combined' | 'spellcheck' | 'activity';
@@ -82,6 +82,7 @@ let unloadListenerAttached = false;
 
 function displayDomainName(domain: string) {
   if (domain === '__SUBJECT_COMPREHENSIVE__') return '세특';
+  if (domain === '__ACTIVITY__') return '활동 기록';
   if (domain === '__ACTIVITY_SEMESTER__') return '활동 종합';
   return domain;
 }
@@ -150,6 +151,26 @@ async function readGenerationEvents(response: Response, onEvent: (event: any) =>
       catch (error) { if (!(error instanceof SyntaxError)) throw error; }
     }
   }
+}
+
+async function submitClaudeBatch(
+  url: string,
+  body: unknown,
+  onPreparing: (event: { completed?: number; total?: number; name?: string }) => void,
+): Promise<any> {
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  let submitted: any = null;
+  await readGenerationEvents(response, event => {
+    if (event.type === 'preparing') onPreparing(event);
+    else if (event.type === 'submitted') submitted = event;
+    else if (event.type === 'fatal') throw new Error(event.error || 'Claude 배치 요청 준비에 실패했습니다.');
+  });
+  if (!submitted) throw new Error('Claude 배치 제출 결과를 받지 못했습니다.');
+  return submitted;
 }
 
 export const useAiBatchStore = create<AiBatchState>((set, get) => ({
@@ -460,20 +481,32 @@ export const useAiBatchStore = create<AiBatchState>((set, get) => ({
       const pendingJob: BatchJob = {
         id: pendingJobId, classId, classLabel, domains: [domain], contentType: 'activity', studentIds,
         completed: 0, total: request.targets.length, errorCount: 0,
-        message: `[${displayDomainName(domain)}] Claude 배치 요청 중...`, status: 'running', startedAt: Date.now(),
+        message: `[${displayDomainName(domain)}]`, status: 'running', startedAt: Date.now(),
         mode: 'claude-batch', providerBatchIds: [], lockedCells,
       };
       set(state => ({ claudeBatchJobs: [...state.claudeBatchJobs, pendingJob] }));
       try {
-        const response = await activityApi.startBatch(classId, request);
-        const batchId = String(response.data.batchId || '');
+        const data = await submitClaudeBatch(`/api/activity/${classId}/batch`, request, event => {
+          const completed = Number(event.completed || 0);
+          const total = Number(event.total || request.targets.length);
+          set(state => ({ claudeBatchJobs: state.claudeBatchJobs.map(job => job.id === pendingJobId ? {
+            ...job,
+            completed,
+            total,
+            message: `[${displayDomainName(domain)}]`,
+          } : job) }));
+        });
+        const batchId = String(data.batchId || '');
         if (!batchId) {
           set(state => ({ claudeBatchJobs: state.claudeBatchJobs.filter(job => job.id !== pendingJobId) }));
           continue;
         }
+        const immediate = Array.isArray(data.immediateUpdates) ? data.immediateUpdates : [];
+        const errors = immediate.filter((item: GeneratedContentUpdate) => item.error).length;
         submitted++;
         set(state => ({ claudeBatchJobs: state.claudeBatchJobs.map(job => job.id === pendingJobId ? {
-          ...pendingJob, id: batchId, providerBatchIds: [batchId], message: `[${displayDomainName(domain)}] Claude 배치 제출 완료`,
+          ...pendingJob, id: batchId, completed: immediate.length, errorCount: errors,
+          providerBatchIds: [batchId], message: `[${displayDomainName(domain)}] Claude 배치 제출 완료`,
         } : job) }));
       } catch {
         set(state => ({ claudeBatchJobs: state.claudeBatchJobs.filter(job => job.id !== pendingJobId) }));
@@ -503,7 +536,7 @@ export const useAiBatchStore = create<AiBatchState>((set, get) => ({
           completed: 0,
           total: studentIds.length,
           errorCount: 0,
-          message: `[${displayDomainName(domain)}] Claude 배치 요청 중...`,
+          message: `[${displayDomainName(domain)}]`,
           status: 'running',
           startedAt: Date.now(),
           mode: 'claude-batch',
@@ -515,15 +548,24 @@ export const useAiBatchStore = create<AiBatchState>((set, get) => ({
         }));
 
         try {
-          const res = await aiApi.generateClaudeBatch({ classId, domain, contentType, studentIds });
-          const batchId = String(res.data.batchId || '');
+          const data = await submitClaudeBatch('/api/ai/generate-claude-batch', { classId, domain, contentType, studentIds }, event => {
+            const completed = Number(event.completed || 0);
+            const total = Number(event.total || studentIds.length);
+            set(state => ({ claudeBatchJobs: state.claudeBatchJobs.map(job => job.id === pendingJobId ? {
+              ...job,
+              completed,
+              total,
+              message: `[${displayDomainName(domain)}]`,
+            } : job) }));
+          });
+          const batchId = String(data.batchId || '');
           if (!batchId) {
             set((state) => ({
               claudeBatchJobs: state.claudeBatchJobs.filter((job) => job.id !== pendingJobId),
             }));
             continue;
           }
-          const immediate = Array.isArray(res.data.immediateUpdates) ? res.data.immediateUpdates : [];
+          const immediate = Array.isArray(data.immediateUpdates) ? data.immediateUpdates : [];
           const errors = immediate.filter((item: GeneratedContentUpdate) => item.error).length;
           const job: BatchJob = {
             ...pendingJob,

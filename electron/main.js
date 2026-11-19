@@ -14,6 +14,13 @@ const ASSIGNMENT_HOST = '0.0.0.0';
 const DEFAULT_ASSIGNMENT_ADMIN_PORT = 3002;
 const DEFAULT_ASSIGNMENT_TEACHER_PORT = 3003;
 const DEFAULT_ASSIGNMENT_STUDENT_PORT = 10000;
+const PYTHON_BASE_REQUIREMENTS = [
+  'pandas==2.2.3',
+  'openpyxl==3.1.5',
+  'nbformat==5.10.4',
+  'nbclient==0.10.2',
+  'ipykernel==6.29.5',
+];
 
 app.setName('ai-assessment-assistant');
 app.setPath('userData', path.join(app.getPath('appData'), 'ai-assessment-assistant'));
@@ -150,7 +157,7 @@ function fileDialogDefaultPath(filename) {
 function setDisplaySleepPrevention(enabled) {
   if (enabled) {
     if (displaySleepBlockerId === null || !powerSaveBlocker.isStarted(displaySleepBlockerId)) {
-      displaySleepBlockerId = powerSaveBlocker.start('prevent-app-suspension');
+      displaySleepBlockerId = powerSaveBlocker.start('prevent-display-sleep');
     }
     return true;
   }
@@ -188,14 +195,35 @@ function getAppStorageDir() {
   return path.join(app.getPath('userData'), 'storage');
 }
 
+function getPythonRuntimeDir() {
+  return path.join(app.getPath('userData'), 'python-runtime');
+}
+
+function getPersistentPythonPath() {
+  const platformPath = process.platform === 'win32'
+    ? path.join('Scripts', 'python.exe')
+    : path.join('bin', 'python3');
+  const pythonPath = path.join(getPythonRuntimeDir(), 'current', platformPath);
+  const manifestPath = path.join(getPythonRuntimeDir(), 'runtime-manifest.json');
+  try {
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    const baseMatches = JSON.stringify(manifest.baseRequirements) === JSON.stringify(PYTHON_BASE_REQUIREMENTS);
+    return fs.existsSync(pythonPath) && baseMatches ? pythonPath : '';
+  } catch {
+    return '';
+  }
+}
+
 function getBundledPythonPath() {
   const platformPath = process.platform === 'win32'
     ? path.join('Scripts', 'python.exe')
     : path.join('bin', 'python3');
   const relativePath = path.join('assessment', 'python', '.venv', platformPath);
   const candidates = [
-    path.join(getAppRoot(), relativePath),
-    path.join(process.resourcesPath, 'app.asar.unpacked', relativePath)
+    // Electron can see files through the app.asar virtual filesystem, but
+    // child_process.spawn cannot execute that path and returns ENOTDIR.
+    path.join(process.resourcesPath, 'app.asar.unpacked', relativePath),
+    path.join(getAppRoot(), relativePath)
   ];
   return candidates.find((candidate) => fs.existsSync(candidate)) || '';
 }
@@ -292,6 +320,8 @@ async function startAssessmentServer() {
   fs.mkdirSync(storageDir, { recursive: true });
   assessmentPort = await getAssessmentPort();
   const bundledPythonPath = getBundledPythonPath();
+  const persistentPythonPath = getPersistentPythonPath();
+  const pythonRuntimeDir = getPythonRuntimeDir();
 
   serverProcess = fork(serverEntry, [], {
     cwd: app.getPath('userData'),
@@ -301,7 +331,10 @@ async function startAssessmentServer() {
       HOST: ASSESSMENT_HOST,
       PORT: String(assessmentPort),
       APP_STORAGE_DIR: storageDir,
-      ...(bundledPythonPath ? { ASSESSMENT_PYTHON: bundledPythonPath } : {})
+      PYTHON_RUNTIME_DIR: pythonRuntimeDir,
+      ASSESSMENT_BASE_REQUIREMENTS_JSON: JSON.stringify(PYTHON_BASE_REQUIREMENTS),
+      ...(bundledPythonPath ? { ASSESSMENT_BOOTSTRAP_PYTHON: bundledPythonPath } : {}),
+      ...((persistentPythonPath || bundledPythonPath) ? { ASSESSMENT_PYTHON: persistentPythonPath || bundledPythonPath } : {})
     },
     stdio: ['ignore', 'pipe', 'pipe', 'ipc']
   });
@@ -724,6 +757,40 @@ async function confirmApplicationClose() {
   // 채점 중: 저장 안 된 변경사항 있으면 경고
   if (activeMode === 'assessment' && mainWindow && !mainWindow.isDestroyed()) {
     try {
+      let pythonEnvironmentInstalling = await mainWindow.webContents.executeJavaScript('window.__pythonEnvironmentInstalling === true');
+      if (!pythonEnvironmentInstalling && assessmentPort) {
+        try {
+          const runtimeState = await fetchJson(`http://${ASSESSMENT_HOST}:${assessmentPort}/api/settings/python-runtime`);
+          pythonEnvironmentInstalling = runtimeState?.installing === true;
+        } catch {
+          // Renderer state remains the fallback if the server cannot be queried.
+        }
+      }
+      if (pythonEnvironmentInstalling) {
+        await dialog.showMessageBox(mainWindow, {
+          type: 'info',
+          title: 'Python 환경 적용 중',
+          message: 'Python 패키지를 설치하고 있습니다.',
+          detail: '적용이 끝난 후 다시 종료해 주세요.',
+          buttons: ['확인'],
+          defaultId: 0,
+        });
+        return false;
+      }
+
+      const batchRequestPending = await mainWindow.webContents.executeJavaScript('window.__aiBatchRequestPending === true');
+      if (batchRequestPending) {
+        await dialog.showMessageBox(mainWindow, {
+          type: 'info',
+          title: '배치 요청 준비 중',
+          message: 'Claude 배치 요청을 준비하고 있습니다.',
+          detail: '학생 산출물과 노트북 실행 결과를 확인하는 중입니다. 요청 준비가 끝난 후 다시 시도해 주세요.',
+          buttons: ['확인'],
+          defaultId: 0,
+        });
+        return false;
+      }
+
       const hasUnsaved = await mainWindow.webContents.executeJavaScript('window.__hasUnsavedChanges === true');
       if (hasUnsaved) {
         const { response } = await dialog.showMessageBox(mainWindow, {

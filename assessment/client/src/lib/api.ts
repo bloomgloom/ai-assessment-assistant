@@ -362,12 +362,13 @@ export const activityApi = {
     files.forEach(file => form.append('files', file));
     return api.post(`/activity/${classId}/files`, form);
   },
-  importFolder: (classId: number, folderPath: string, selectedDate: string, allowDateFolders = false) => api.post(`/activity/${classId}/import`, { folderPath, selectedDate, allowDateFolders }),
-  importZip: (classId: number, file: File, selectedDate: string, allowDateFolders = false) => {
+  importFolder: (classId: number, folderPath: string, selectedDate: string, allowDateFolders = false, existingPolicy = '') => api.post(`/activity/${classId}/import`, { folderPath, selectedDate, allowDateFolders, existingPolicy }),
+  importZip: (classId: number, file: File, selectedDate: string, allowDateFolders = false, existingPolicy = '') => {
     const form = new FormData();
     form.append('file', file);
     form.append('selectedDate', selectedDate);
     form.append('allowDateFolders', String(allowDateFolders));
+    if (existingPolicy) form.append('existingPolicy', existingPolicy);
     return api.post(`/activity/${classId}/import`, form);
   },
   getPending: (classId: number) => api.get(`/activity/${classId}/pending`, { params: { t: Date.now() } }),

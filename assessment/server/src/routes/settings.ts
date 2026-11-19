@@ -19,6 +19,7 @@ import {
 } from '../services/llm';
 import type { AnthropicEffort, AnthropicOutputOptions, AnthropicOutputTask } from '../services/llm';
 import { deleteAllAssignmentConfigs } from './assignmentConfigs';
+import { applyPythonRequirements, getPythonRuntimeState } from '../services/pythonRuntime';
 
 const UPLOADS_ROOT = UPLOADS_DIR;
 const router = Router();
@@ -121,6 +122,37 @@ router.get('/', async (_req: Request, res: Response) => {
     assignmentTeacherPasswordSet: !!teacherPassword?.value,
     assignmentUploadApprovalMb: Math.max(1, Number(uploadApproval?.value) || 50),
   });
+});
+
+router.get('/python-runtime', (_req: Request, res: Response) => {
+  try {
+    res.json(getPythonRuntimeState());
+  } catch (e: unknown) {
+    const message = e instanceof Error ? e.message : String(e);
+    res.status(500).json({ error: message });
+  }
+});
+
+router.post('/python-runtime/apply', async (req: Request, res: Response) => {
+  res.status(200);
+  res.setHeader('Content-Type', 'application/x-ndjson; charset=utf-8');
+  res.setHeader('Cache-Control', 'no-store');
+  res.setHeader('X-Accel-Buffering', 'no');
+  res.flushHeaders();
+
+  const send = (value: unknown) => {
+    if (!res.writableEnded && !res.destroyed) res.write(`${JSON.stringify(value)}\n`);
+  };
+
+  try {
+    const state = await applyPythonRequirements(req.body?.requirements, send);
+    send({ type: 'complete', state });
+  } catch (e: unknown) {
+    const message = e instanceof Error ? e.message : String(e);
+    send({ type: 'error', error: message, state: getPythonRuntimeState() });
+  } finally {
+    res.end();
+  }
 });
 
 router.put('/', async (req: Request, res: Response) => {

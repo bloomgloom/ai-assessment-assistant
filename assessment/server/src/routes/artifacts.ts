@@ -7,12 +7,12 @@ import * as cheerio from 'cheerio';
 import { queryOne, queryAll } from '../services/db';
 import { assignmentExecute, assignmentQueryAll, assignmentQueryOne, assignmentTransaction } from '../services/assignmentDb';
 import { assignmentArtifactSummaryForStudent } from '../services/assignmentArtifacts';
-import { UPLOADS_DIR, ensureDir, moveFileToTrash, resolveStoredPath, restoreTrashedFile, toStoredPath } from '../services/storage';
+import { UPLOADS_DIR, ensureDir, moveFileToTrash, restoreTrashedFile, toStoredPath } from '../services/storage';
 import { decodeUploadFilename } from '../services/filename';
 import { entriesFromImportSource, entryFilename } from '../services/importEntries';
-import { ArtifactImportService, normalizedImportPath } from '../services/artifactImportService';
-import { matchStudentsByPath } from '../services/studentMatcher';
+import { ArtifactImportService, parseBulkExistingPolicy, preflightArtifactImports } from '../services/artifactImportService';
 import { storedArtifactFilename } from '../services/artifactStorageFilename';
+import { artifactContentType, sendArtifactFile } from '../services/artifactFileResponse';
 
 const router = Router();
 
@@ -21,29 +21,6 @@ const TEMP_DIR = path.join(UPLOADS_DIR, 'temp');
 [UPLOAD_DIR, TEMP_DIR].forEach(ensureDir);
 
 const upload = multer({ dest: TEMP_DIR, limits: { fileSize: 200 * 1024 * 1024 } });
-
-// 파일 확장자 → Content-Type
-const TEXT_CONTENT_TYPES: Record<string, string> = {
-  '.py':   'text/x-python; charset=utf-8',
-  '.js':   'text/javascript; charset=utf-8',
-  '.jsx':  'text/javascript; charset=utf-8',
-  '.ts':   'text/typescript; charset=utf-8',
-  '.tsx':  'text/typescript; charset=utf-8',
-  '.java': 'text/x-java; charset=utf-8',
-  '.c':    'text/x-c; charset=utf-8',
-  '.cpp':  'text/x-c++; charset=utf-8',
-  '.h':    'text/x-c; charset=utf-8',
-  '.css':  'text/css; charset=utf-8',
-  '.sql':  'text/x-sql; charset=utf-8',
-  '.json': 'application/json; charset=utf-8',
-  '.ipynb': 'application/x-ipynb+json; charset=utf-8',
-  '.csv':  'text/csv; charset=utf-8',
-  '.md':   'text/markdown; charset=utf-8',
-  '.txt':  'text/plain; charset=utf-8',
-  '.html': 'text/html; charset=utf-8',
-  '.hwpx': 'application/vnd.hancom.hwpx',
-  '.pdf':  'application/pdf',
-};
 
 function escHtml(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -68,8 +45,6 @@ function uniqueArtifactPath(
   }
   return candidate;
 }
-
-type BulkExistingPolicy = 'skip' | 'replace' | 'append';
 
 type ExistingBulkArtifact = {
   id: number;
@@ -343,13 +318,10 @@ router.post('/student/:studentId', upload.array('files', 20), async (req: Reques
   try {
     for (const [index, file] of files.entries()) {
       const origName = uploadNames[index];
-      const ext = path.extname(origName).toLowerCase();
 
       const finalPath = uniqueArtifactPath(baseUploadDir, student, origName);
       const finalName = origName;
-      let mimeType = file.mimetype || TEXT_CONTENT_TYPES[ext] || '';
-
-      if (TEXT_CONTENT_TYPES[ext]) mimeType = TEXT_CONTENT_TYPES[ext];
+      const mimeType = artifactContentType(origName, file.mimetype);
 
       fs.renameSync(file.path, finalPath);
       movedPaths.push(finalPath);
@@ -408,26 +380,11 @@ router.post('/bulk-upload/:classId', upload.single('file'), async (req: Request,
     );
     fs.mkdirSync(baseUploadDir, { recursive: true });
 
-    const matchedStudentIds = new Set<number>();
-    const preflightMatches: Array<{
-      path: string;
-      filename: string;
-      matches: Array<{ id: number; student_num: number; name: string }>;
-    }> = [];
-    for (const entry of importEntries) {
-      const filename = entryFilename(entry);
-      if (!filename || filename.startsWith('.')) continue;
-      const normalizedPath = normalizedImportPath(entry);
-      const matches = matchStudentsByPath(normalizedPath, students);
-      preflightMatches.push({ path: normalizedPath, filename, matches });
-      if (matches.length === 1) matchedStudentIds.add(matches[0].id);
-    }
+    const preflightMatches = preflightArtifactImports(importEntries, students, (_entry, filename) => !filename.startsWith('.'));
+    const matchedStudentIds = new Set(preflightMatches.flatMap(item => item.matches.length === 1 ? [item.matches[0].id] : []));
     const existing = await existingBulkArtifacts(classId, domain, students, matchedStudentIds);
     const existingStudentIds = new Set(existing.map(item => item.studentId));
-    const policyValue = String(req.body.existingPolicy || '');
-    const existingPolicy = ['skip', 'replace', 'append'].includes(policyValue)
-      ? policyValue as BulkExistingPolicy
-      : null;
+    const existingPolicy = parseBulkExistingPolicy(req.body.existingPolicy);
     if (existing.length && !existingPolicy) {
       if (req.file) fs.unlinkSync(req.file.path);
       const conflictStudents = students
@@ -498,10 +455,9 @@ router.post('/bulk-upload/:classId', upload.single('file'), async (req: Request,
         : { kind: 'read' as const, target: undefined },
       store: async context => {
         const decodedName = context.path.split(/[/\\]/).pop() || context.filename.normalize('NFC');
-        const fileExt = path.extname(decodedName).toLowerCase();
         const savePath = uniqueArtifactPath(baseUploadDir, context.student, decodedName);
         fs.writeFileSync(savePath, context.buffer);
-        const ct = TEXT_CONTENT_TYPES[fileExt] || '';
+        const ct = artifactContentType(decodedName);
         try {
           await assignmentExecute(
             `INSERT INTO assignment_artifacts(assessment_student_id, domain, filename, filepath,mime_type,size)
@@ -601,20 +557,8 @@ router.get('/:id/file', async (req: Request, res: Response) => {
   const artifact = await assignmentQueryOne<{ filename: string; filepath: string; mime_type: string }>(
     'SELECT filename, filepath, mime_type FROM assignment_artifacts WHERE id=?', [req.params.id]
   );
-  const filepath = artifact ? resolveStoredPath(artifact.filepath) : '';
-  if (!artifact || !fs.existsSync(filepath)) {
-    return res.status(404).json({ error: '파일을 찾을 수 없습니다.' });
-  }
-
-  // 텍스트/코드 파일은 charset=utf-8 강제 설정 (새창 한글 깨짐 방지)
-  const ext = path.extname(artifact.filename).toLowerCase();
-  const contentType = TEXT_CONTENT_TYPES[ext]
-    || artifact.mime_type
-    || 'application/octet-stream';
-
-  res.setHeader('Content-Type', contentType);
-  res.setHeader('Content-Disposition', `inline; filename*=UTF-8''${encodeURIComponent(artifact.filename)}`);
-  res.sendFile(path.resolve(filepath));
+  if (!artifact) return res.status(404).json({ error: '파일을 찾을 수 없습니다.' });
+  sendArtifactFile(res, artifact);
 });
 
 // ── 파일 삭제 ──────────────────────────────────────────────────────────────────
