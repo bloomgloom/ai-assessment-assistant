@@ -23,17 +23,19 @@ const UNQUOTED_FILE_REFERENCE_PATTERN = new RegExp(
 );
 const QUOTED_TEXT_PATTERN = /(['"`])([^'"`\r\n]{0,300})\1/g;
 
-interface ArtifactPrivacyMapper {
+export interface ArtifactPrivacyMapper {
   artifactName(artifact: ArtifactRow): string;
   sanitizeText(text: string): string;
 }
 
-function createArtifactPrivacyMapper(artifacts: ArtifactRow[]): ArtifactPrivacyMapper {
+export function createArtifactPrivacyMapper(artifacts: ArtifactRow[]): ArtifactPrivacyMapper {
   const mapping = new Map<string, string>();
+  const anonymizedNames = new Set<string>();
   let nextFileIndex = 1;
 
   const anonymize = (rawReference: string): string => {
     const key = rawReference.normalize('NFC');
+    if (anonymizedNames.has(key)) return key;
     const existing = mapping.get(key);
     if (existing) return existing;
 
@@ -41,17 +43,34 @@ function createArtifactPrivacyMapper(artifacts: ArtifactRow[]): ArtifactPrivacyM
     const anonymized = `file_${String(nextFileIndex).padStart(3, '0')}${ext ? `.${ext}` : ''}`;
     nextFileIndex += 1;
     mapping.set(key, anonymized);
+    anonymizedNames.add(anonymized);
     return anonymized;
   };
 
   for (const artifact of artifacts) anonymize(artifact.filename);
+
+  const knownFilenameVariants = artifacts
+    .flatMap((artifact) => {
+      const filename = artifact.filename;
+      return [filename, filename.normalize('NFC'), filename.normalize('NFD')];
+    })
+    .filter((filename, index, filenames) => filename && filenames.indexOf(filename) === index)
+    .sort((left, right) => right.length - left.length);
+
+  const replaceKnownFilenames = (text: string): string => {
+    let sanitized = text;
+    for (const filename of knownFilenameVariants) {
+      sanitized = sanitized.split(filename).join(anonymize(filename));
+    }
+    return sanitized;
+  };
 
   return {
     artifactName(artifact: ArtifactRow): string {
       return anonymize(artifact.filename);
     },
     sanitizeText(text: string): string {
-      return text
+      return replaceKnownFilenames(text)
         .replace(QUOTED_TEXT_PATTERN, (_match, quote: string, content: string) => {
           const sanitizedContent = content.replace(UNQUOTED_FILE_REFERENCE_PATTERN, (_contentMatch, reference: string) => {
             return anonymize(reference);

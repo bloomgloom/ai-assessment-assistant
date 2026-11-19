@@ -1,4 +1,4 @@
-import { lazy, Suspense, useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { lazy, Suspense, useState, useEffect, useCallback, useMemo, useRef, type ReactNode } from 'react';
 import { recordsApi, criteriaApi, classesApi, aiApi, settingsApi, activityApi } from '../../lib/api';
 import { useAiBatchStore } from '../../stores/aiBatchStore';
 import { useRecordsUnsavedStore } from '../../stores/recordsUnsavedStore';
@@ -22,6 +22,44 @@ import { ClaudeBatchResultsDialog, type ClaudeBatchResultJob } from '../../compo
 const ArtifactViewer = lazy(() => import('../../components/ArtifactViewer'));
 
 const RECORD_TEXTAREA_MIN_HEIGHT = 80;
+
+function ScoringReasonTooltip({ reason, disabled, children }: { reason: string; disabled: boolean; children: ReactNode }) {
+  const anchorRef = useRef<HTMLDivElement>(null);
+  const tooltipRef = useRef<HTMLDivElement>(null);
+  const [placement, setPlacement] = useState({ above: false, maxHeight: 320 });
+
+  const updatePlacement = useCallback(() => {
+    const anchor = anchorRef.current;
+    const tooltip = tooltipRef.current;
+    if (!anchor || !tooltip) return;
+    const anchorRect = anchor.getBoundingClientRect();
+    const scrollContainer = anchor.closest('.records-table-scroll-container');
+    const containerRect = scrollContainer?.getBoundingClientRect();
+    const top = Math.max(0, containerRect?.top ?? 0);
+    const bottom = Math.min(window.innerHeight, containerRect?.bottom ?? window.innerHeight);
+    const aboveSpace = Math.max(0, anchorRect.top - top - 8);
+    const belowSpace = Math.max(0, bottom - anchorRect.bottom - 8);
+    const desiredHeight = Math.min(320, tooltip.scrollHeight);
+    const above = belowSpace < desiredHeight && aboveSpace > belowSpace;
+    setPlacement({ above, maxHeight: Math.max(80, Math.min(320, above ? aboveSpace : belowSpace)) });
+  }, []);
+
+  return (
+    <div ref={anchorRef} className="group/reason relative" onMouseEnter={updatePlacement} onFocusCapture={updatePlacement}>
+      {children}
+      {reason && !disabled && (
+        <div
+          ref={tooltipRef}
+          className={`pointer-events-auto absolute left-1/2 z-50 invisible w-72 -translate-x-1/2 overflow-auto rounded-md border border-amber-200 bg-amber-50 p-3 text-left text-xs leading-relaxed text-amber-950 opacity-0 shadow-lg ring-1 ring-amber-100 group-hover/reason:visible group-hover/reason:opacity-100 group-focus-within/reason:visible group-focus-within/reason:opacity-100 ${placement.above ? 'bottom-full mb-2' : 'top-full mt-2'}`}
+          style={{ maxHeight: placement.maxHeight }}
+        >
+          <div className="mb-1 text-[11px] font-semibold text-amber-700">AI 판단 이유</div>
+          <div className="whitespace-pre-wrap">{reason}</div>
+        </div>
+      )}
+    </div>
+  );
+}
 
 function getDomainColumnDefaultWidth(type: string) {
   if (type === 'comments' || type === 'comments_item') return 200;
@@ -88,9 +126,10 @@ interface RecordsViewPrefs {
 
 interface BulkZipUploadResultItem {
   path: string;
-  status: 'uploaded' | 'unmatched' | 'conflict' | 'read_error';
+  status: 'uploaded' | 'unmatched' | 'conflict' | 'read_error' | 'unchanged' | 'ready' | 'existing';
   studentId?: number;
   student?: string;
+  filename?: string;
   reason?: string;
 }
 
@@ -102,9 +141,17 @@ interface BulkZipUploadResult {
   unmatchedCount: number;
   conflictCount: number;
   errorCount: number;
+  skippedCount?: number;
+  existingStudentCount?: number;
+  existingArtifactCount?: number;
+  readyCount?: number;
   results: BulkZipUploadResultItem[];
   failed?: boolean;
+  requiresExistingPolicy?: boolean;
 }
+
+type BulkExistingPolicy = 'skip' | 'replace' | 'append';
+type PendingBulkArtifactUpload = { file?: File; folderPath?: string };
 
 function recordsViewPrefsKey(classItem: ClassItem) {
   return [
@@ -167,6 +214,7 @@ export function useRecordsPage() {
   const [showClaudeBatchDialog, setShowClaudeBatchDialog] = useState(false);
   const [receivingClaudeBatchId, setReceivingClaudeBatchId] = useState('');
   const [bulkZipResult, setBulkZipResult] = useState<BulkZipUploadResult | null>(null);
+  const [pendingBulkArtifactUpload, setPendingBulkArtifactUpload] = useState<PendingBulkArtifactUpload | null>(null);
 
   const [showGuide, setShowGuide] = useState(() => localStorage.getItem(RECORDS_GUIDE_KEY) !== '1');
   const recordsTree = useRecordsTree(classes);
@@ -1088,13 +1136,14 @@ export function useRecordsPage() {
     return domain === SUBJECT_COMPREHENSIVE_DOMAIN ? '세특' : domain;
   };
 
-  const handleBulkArtifactUpload = async ({ file, folderPath }: { file?: File; folderPath?: string }) => {
+  const handleBulkArtifactUpload = async ({ file, folderPath, existingPolicy }: PendingBulkArtifactUpload & { existingPolicy?: BulkExistingPolicy }) => {
     if (!selectedClass || domainFilter === 'all' || (!file && !folderPath)) return;
     setUploadingZip(true);
     const formData = new FormData();
     if (file) formData.append('file', file);
     if (folderPath) formData.append('folderPath', folderPath);
     formData.append('domain', domainFilter);
+    if (existingPolicy) formData.append('existingPolicy', existingPolicy);
 
     try {
       const res = await fetch(`/api/artifacts/bulk-upload/${selectedClass.id}`, {
@@ -1102,8 +1151,27 @@ export function useRecordsPage() {
         body: formData,
       });
       const data = await res.json();
+      if (res.status === 409 && data.conflict === 'existing_artifacts') {
+        setPendingBulkArtifactUpload({ file, folderPath });
+        setBulkZipResult({
+          message: data.message,
+          count: 0,
+          total: data.total || 0,
+          studentCount: (data.existingStudentCount || 0) + (data.readyCount || 0),
+          unmatchedCount: data.unmatchedCount || 0,
+          conflictCount: data.conflictCount || 0,
+          errorCount: 0,
+          existingStudentCount: data.existingStudentCount || 0,
+          existingArtifactCount: data.existingArtifactCount || 0,
+          readyCount: data.readyCount || 0,
+          results: data.results || [],
+          requiresExistingPolicy: true,
+        });
+        return;
+      }
       if (!res.ok) throw new Error(data.error || '업로드 실패');
 
+      setPendingBulkArtifactUpload(null);
       setBulkZipResult(data as BulkZipUploadResult);
       await loadDomainData(selectedClass);
       setArtifactRefreshKey(k => k + 1);
@@ -1125,6 +1193,13 @@ export function useRecordsPage() {
   };
   const handleBulkZipUpload = (file: File) => handleBulkArtifactUpload({ file });
   const handleBulkFolderUpload = (folderPath: string) => handleBulkArtifactUpload({ folderPath });
+  const handleBulkExistingPolicy = (existingPolicy: BulkExistingPolicy) => {
+    if (!pendingBulkArtifactUpload) return;
+    const pending = pendingBulkArtifactUpload;
+    setPendingBulkArtifactUpload(null);
+    setBulkZipResult(null);
+    void handleBulkArtifactUpload({ ...pending, existingPolicy });
+  };
 
   const handleExport = async (type: 'comments' | 'scoring') => {
     if (!selectedClass) return;
@@ -1495,21 +1570,36 @@ export function useRecordsPage() {
           )}
           {bulkZipResult && (
             <BulkImportResultDialog
-              title="산출물 일괄 업로드 결과"
+              title={bulkZipResult.requiresExistingPolicy ? '산출물 매칭 결과' : '산출물 일괄 업로드 결과'}
               message={bulkZipResult.message}
-              onClose={() => setBulkZipResult(null)}
+              onClose={() => {
+                setBulkZipResult(null);
+                setPendingBulkArtifactUpload(null);
+              }}
               results={bulkZipResult.results}
-              stats={[
+              stats={bulkZipResult.requiresExistingPolicy ? [
+                { label: '전체 파일', value: bulkZipResult.total },
+                { label: '기존 산출물 학생', value: bulkZipResult.existingStudentCount || 0 },
+                { label: '기존 파일', value: bulkZipResult.existingArtifactCount || 0 },
+                { label: '바로 등록 가능', value: bulkZipResult.readyCount || 0 },
+                { label: '미매칭/충돌', value: bulkZipResult.unmatchedCount + bulkZipResult.conflictCount },
+              ] : [
                 { label: '전체 파일', value: bulkZipResult.total },
                 { label: '등록', value: bulkZipResult.count },
+                { label: '건너뜀', value: bulkZipResult.skippedCount || 0 },
                 { label: '연결 학생', value: bulkZipResult.studentCount },
                 { label: '미매칭', value: bulkZipResult.unmatchedCount },
                 { label: '충돌/오류', value: bulkZipResult.conflictCount + bulkZipResult.errorCount },
               ]}
+              actions={bulkZipResult.requiresExistingPolicy ? [
+                { label: '기존 유지 · 건너뛰기', className: 'btn-secondary', onClick: () => handleBulkExistingPolicy('skip') },
+                { label: '기존 삭제 · 새로 등록', className: 'btn-danger', onClick: () => handleBulkExistingPolicy('replace') },
+                { label: '기존과 새 파일 모두 등록', className: 'btn-primary', onClick: () => handleBulkExistingPolicy('append') },
+              ] : undefined}
             />
           )}
           {/* 테이블 뷰 */}
-          <div className="flex-1 overflow-auto scrollbar-stable bg-white pb-32">
+          <div className="records-table-scroll-container flex-1 overflow-auto scrollbar-stable bg-white pb-32">
             {students.length === 0 ? (
               <div className="py-20 text-center text-gray-400">학생 명단이 없습니다.</div>
             ) : (
@@ -1675,7 +1765,7 @@ export function useRecordsPage() {
                                 <td key={`${d.name}_${c.id}`} className="group relative border-r align-top p-1"
                                   style={{ width: w, minWidth: w }}>
                                   {renderLlmErrorTooltip(domainLlmError)}
-                                  <div className="group/reason relative">
+                                  <ScoringReasonTooltip reason={reason} disabled={locked}>
                                     <input type="text" className={`input w-full text-sm text-center disabled:bg-blue-50 disabled:text-gray-500 disabled:cursor-not-allowed ${dirtyControlClass(dirty)}`}
                                       value={scoreData[c.id] ?? ''}
                                       onChange={ev => updateContent(s.id, 'scoring', c.id, ev.target.value, d.name)}
@@ -1684,13 +1774,7 @@ export function useRecordsPage() {
                                       onKeyDown={e => handleKeyNav(e, rowIdx, c.fi)}
                                       title={locked ? 'AI 채점 진행 중이라 수정할 수 없습니다.' : undefined}
                                     />
-                                    {reason && !locked && (
-                                      <div className="pointer-events-none absolute left-1/2 top-full z-50 mt-2 hidden w-72 -translate-x-1/2 rounded-md border border-amber-200 bg-amber-50 p-3 text-left text-xs leading-relaxed text-amber-950 shadow-lg ring-1 ring-amber-100 group-hover/reason:block group-focus-within/reason:block">
-                                        <div className="mb-1 text-[11px] font-semibold text-amber-700">AI 판단 이유</div>
-                                        <div className="whitespace-pre-wrap">{reason}</div>
-                                      </div>
-                                    )}
-                                  </div>
+                                  </ScoringReasonTooltip>
                                   {renderCellResizeHandles(s.id, wk, defW)}
                                 </td>
                               );

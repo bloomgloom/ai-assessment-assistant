@@ -40,7 +40,7 @@ export interface ArtifactImportSummary {
   results: ArtifactImportResult[];
 }
 
-function normalizedPath(entry: ImportEntry): string {
+export function normalizedImportPath(entry: ImportEntry): string {
   let value = entry.relativePath.normalize('NFC');
   if (value.includes('\uFFFD')) {
     try { value = Buffer.from(entry.relativePath, 'latin1').toString('utf8').normalize('NFC'); } catch {}
@@ -63,7 +63,7 @@ export class ArtifactImportService<TStudent extends MatchableStudent, TTarget> {
       const filename = entryFilename(entry);
       if (!filename || this.policy.include?.(entry, filename) === false) continue;
       total += 1;
-      const path = normalizedPath(entry);
+      const path = normalizedImportPath(entry);
       const matches = matchStudentsByPath(path, this.students);
       if (matches.length === 0) {
         results.push({ path, status: 'unmatched', reason: '경로에서 학번·이름을 찾지 못했습니다.' });

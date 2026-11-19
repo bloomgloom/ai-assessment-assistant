@@ -11,6 +11,7 @@ import { execute, initDb, queryAll, queryOne, transaction } from './db';
 import { decodeUploadFilename, studentDownloadFilename } from './filename';
 import { fetchGithub, fetchGithubText } from './githubSource';
 import { ASSIGNMENT_RESOURCES_DIR, LOGS_DIR, moveFileToTrash, resolveStoredPath, restoreTrashedFile, RUN_RESOURCES_DIR, SUBMISSIONS_DIR, TEMP_DIR, toStoredPath } from './storage';
+import { storedArtifactFilename } from './artifactStorageFilename';
 
 const app = express();
 const teacherApp = express();
@@ -1342,10 +1343,9 @@ async function handleSubmission(req: any, res: any, run: any) {
   const submissionBatchId = `${Date.now()}-${crypto.randomBytes(8).toString('hex')}`;
   for (const [index, file] of files.entries()) {
     const original = decodeUploadFilename(file.originalname);
-    const ext = path.extname(original).toLowerCase();
     const rule = ruleById.get(submittedSlotIds[index])!;
-    const stored = `${studentNum}_${safeSegment(name)}_${safeSegment(rule.name)}${files.length > 1 ? `_${index + 1}` : ''}${ext}`;
-    const finalPath = path.join(baseDir, `${Date.now()}_${stored}`);
+    const stored = storedArtifactFilename(studentNum, name, original);
+    const finalPath = path.join(baseDir, stored);
     fs.renameSync(file.path, finalPath);
     const inserted = await execute(
       `INSERT INTO assignment_submissions(

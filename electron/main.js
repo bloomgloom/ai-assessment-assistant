@@ -512,6 +512,20 @@ async function startMode(mode) {
 }
 
 async function createWindow() {
+  const isTrustedAssessmentPreviewSender = (sender) => {
+    if (!mainWindow || !sender) return false;
+    if (sender === mainWindow.webContents) return true;
+    if (!assessmentPort) return false;
+    try {
+      const senderUrl = new URL(sender.getURL());
+      const isAssessmentOrigin = senderUrl.origin === `http://${ASSESSMENT_HOST}:${assessmentPort}`;
+      return isAssessmentOrigin
+        && (senderUrl.pathname.startsWith('/file-preview/') || /^\/artifacts\/\d+\/view$/.test(senderUrl.pathname));
+    } catch {
+      return false;
+    }
+  };
+
   ipcMain.removeHandler('display-sleep-prevention');
   ipcMain.removeHandler('save-file');
   ipcMain.removeHandler('open-files');
@@ -522,7 +536,7 @@ async function createWindow() {
     return setDisplaySleepPrevention(Boolean(enabled));
   });
   ipcMain.handle('save-file', async (event, { filename, data }) => {
-    if (!mainWindow || event.sender !== mainWindow.webContents) return { canceled: true };
+    if (!isTrustedAssessmentPreviewSender(event.sender)) return { canceled: true };
     const { canceled, filePath } = await dialog.showSaveDialog(mainWindow, {
       defaultPath: fileDialogDefaultPath(filename || 'download'),
     });
@@ -595,6 +609,35 @@ async function createWindow() {
 
   mainWindow.webContents.on('will-prevent-unload', (event) => {
     if (isForceQuit || isForceWindowClose) event.preventDefault();
+  });
+
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    let isFilePreview = false;
+    try {
+      const pathname = new URL(url).pathname;
+      isFilePreview = pathname.startsWith('/file-preview/') || /^\/artifacts\/\d+\/view$/.test(pathname);
+    } catch {
+      // URL을 해석할 수 없으면 Electron 기본 새 창 동작을 사용합니다.
+    }
+    if (!isFilePreview) return { action: 'allow' };
+
+    const workArea = screen.getDisplayMatching(mainWindow.getBounds()).workArea;
+    return {
+      action: 'allow',
+      overrideBrowserWindowOptions: {
+        width: Math.max(720, Math.min(1200, workArea.width - 80)),
+        height: Math.max(560, Math.min(900, workArea.height - 80)),
+        minWidth: 640,
+        minHeight: 480,
+        useContentSize: true,
+        title: '산출물 미리보기',
+        webPreferences: {
+          preload: path.join(__dirname, 'preload.js'),
+          contextIsolation: true,
+          nodeIntegration: false,
+        },
+      },
+    };
   });
 
   mainWindow.webContents.on('will-navigate', (event, url) => {

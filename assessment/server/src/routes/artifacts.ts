@@ -5,12 +5,14 @@ import fs from 'fs';
 import * as unzipper from 'unzipper';
 import * as cheerio from 'cheerio';
 import { queryOne, queryAll } from '../services/db';
-import { assignmentExecute, assignmentQueryAll, assignmentQueryOne } from '../services/assignmentDb';
-import { assignmentArtifactSummaryForStudent, assignmentArtifactsForStudent } from '../services/assignmentArtifacts';
+import { assignmentExecute, assignmentQueryAll, assignmentQueryOne, assignmentTransaction } from '../services/assignmentDb';
+import { assignmentArtifactSummaryForStudent } from '../services/assignmentArtifacts';
 import { UPLOADS_DIR, ensureDir, moveFileToTrash, resolveStoredPath, restoreTrashedFile, toStoredPath } from '../services/storage';
 import { decodeUploadFilename } from '../services/filename';
 import { entriesFromImportSource, entryFilename } from '../services/importEntries';
-import { ArtifactImportService } from '../services/artifactImportService';
+import { ArtifactImportService, normalizedImportPath } from '../services/artifactImportService';
+import { matchStudentsByPath } from '../services/studentMatcher';
+import { storedArtifactFilename } from '../services/artifactStorageFilename';
 
 const router = Router();
 
@@ -55,31 +57,83 @@ function safePathSegment(value: string): string {
     .trim() || '_';
 }
 
-function uniqueArtifactPath(baseDir: string, filename: string, index: number): string {
-  const normalizedName = safePathSegment(path.basename(filename.normalize('NFC')));
-  const candidate = path.join(baseDir, `${Date.now()}_${index}_${normalizedName}`);
-  if (!fs.existsSync(candidate)) return candidate;
-  return path.join(baseDir, `${Date.now()}_${index}_${Math.random().toString(36).slice(2, 8)}_${normalizedName}`);
-}
-
-async function deleteArtifactRows(rows: { id: number; filepath: string }[]): Promise<void> {
-  for (const row of rows) {
-    const filepath = resolveStoredPath(row.filepath);
-    try { if (fs.existsSync(filepath)) fs.unlinkSync(filepath); } catch {}
-    await assignmentExecute('DELETE FROM assignment_artifacts WHERE id=?', [row.id]);
+function uniqueArtifactPath(
+  baseDir: string,
+  student: { student_num: number; name: string },
+  filename: string,
+): string {
+  let candidate = path.join(baseDir, storedArtifactFilename(student.student_num, student.name, filename));
+  while (fs.existsSync(candidate)) {
+    candidate = path.join(baseDir, storedArtifactFilename(student.student_num, student.name, filename));
   }
+  return candidate;
 }
 
-async function clearArtifactsForClassDomain(classId: number | string, domain: string): Promise<void> {
-  const students = await queryAll<{ id: number }>('SELECT id FROM class_students WHERE class_id=?', [classId]);
-  if (!students.length) return;
-  const placeholders = students.map(() => '?').join(',');
-  const existing = await assignmentQueryAll<{ id: number; filepath: string }>(
-    `SELECT id, filepath FROM assignment_artifacts
-     WHERE assessment_student_id IN (${placeholders}) AND domain=?`,
-    [...students.map(student => student.id), domain]
+type BulkExistingPolicy = 'skip' | 'replace' | 'append';
+
+type ExistingBulkArtifact = {
+  id: number;
+  filepath: string;
+  source: 'artifact' | 'assignment';
+  studentId: number;
+};
+
+async function existingBulkArtifacts(
+  classId: number | string,
+  domain: string,
+  students: Array<{ id: number; student_num: number; name: string }>,
+  matchedStudentIds: Set<number>,
+): Promise<ExistingBulkArtifact[]> {
+  if (!matchedStudentIds.size) return [];
+  const targetStudents = students.filter(student => matchedStudentIds.has(student.id));
+  const studentIds = targetStudents.map(student => student.id);
+  const placeholders = studentIds.map(() => '?').join(',');
+  const manual = await assignmentQueryAll<{ id: number; filepath: string; assessment_student_id: number }>(
+    `SELECT id, filepath, assessment_student_id
+     FROM assignment_artifacts
+     WHERE domain=? AND assessment_student_id IN (${placeholders})`,
+    [domain, ...studentIds]
   );
-  await deleteArtifactRows(existing);
+  const submitted = await assignmentQueryAll<{
+    id: number;
+    filepath: string;
+    assessment_student_id: number;
+    student_num: number;
+    name: string;
+  }>(
+    `SELECT sub.id, sub.filepath, COALESCE(ast.assessment_student_id, 0) AS assessment_student_id,
+            sub.student_num, sub.name
+     FROM assignment_submissions sub
+     JOIN assignment_runs run ON run.id=sub.run_id
+     JOIN assignment_configs cfg ON cfg.id=run.config_id
+     JOIN assignment_classes ac ON ac.id=run.assignment_class_id
+     LEFT JOIN assignment_students ast ON ast.id=sub.assignment_student_id
+     WHERE cfg.domain_name=? AND ac.assessment_class_id=?
+       AND sub.status='accepted' AND sub.submission_slot_id!=''`,
+    [domain, classId]
+  );
+  const targetById = new Map(targetStudents.map(student => [student.id, student]));
+  const targetByIdentity = new Map(targetStudents.map(student => [`${student.student_num}::${student.name}`, student.id]));
+  return [
+    ...manual.map(row => ({
+      id: Number(row.id),
+      filepath: String(row.filepath || ''),
+      source: 'artifact' as const,
+      studentId: Number(row.assessment_student_id),
+    })),
+    ...submitted.flatMap(row => {
+      const linkedId = Number(row.assessment_student_id);
+      const studentId = targetById.has(linkedId)
+        ? linkedId
+        : targetByIdentity.get(`${row.student_num}::${row.name}`);
+      return studentId ? [{
+        id: Number(row.id),
+        filepath: String(row.filepath || ''),
+        source: 'assignment' as const,
+        studentId,
+      }] : [];
+    }),
+  ];
 }
 
 // HWPX → HTML 변환
@@ -291,7 +345,7 @@ router.post('/student/:studentId', upload.array('files', 20), async (req: Reques
       const origName = uploadNames[index];
       const ext = path.extname(origName).toLowerCase();
 
-      const finalPath = uniqueArtifactPath(baseUploadDir, origName, index);
+      const finalPath = uniqueArtifactPath(baseUploadDir, student, origName);
       const finalName = origName;
       let mimeType = file.mimetype || TEXT_CONTENT_TYPES[ext] || '';
 
@@ -352,33 +406,161 @@ router.post('/bulk-upload/:classId', upload.single('file'), async (req: Request,
     const baseUploadDir = path.join(
       UPLOAD_DIR, String(cls.year), String(cls.semester), String(cls.grade), cls.subject, cls.room, domain
     );
-    // 강의실-영역 단위로 기존 DB 레코드와 실제 저장 파일을 모두 초기화한다.
-    await clearArtifactsForClassDomain(classId, domain);
-    fs.rmSync(baseUploadDir, { recursive: true, force: true });
     fs.mkdirSync(baseUploadDir, { recursive: true });
 
+    const matchedStudentIds = new Set<number>();
+    const preflightMatches: Array<{
+      path: string;
+      filename: string;
+      matches: Array<{ id: number; student_num: number; name: string }>;
+    }> = [];
+    for (const entry of importEntries) {
+      const filename = entryFilename(entry);
+      if (!filename || filename.startsWith('.')) continue;
+      const normalizedPath = normalizedImportPath(entry);
+      const matches = matchStudentsByPath(normalizedPath, students);
+      preflightMatches.push({ path: normalizedPath, filename, matches });
+      if (matches.length === 1) matchedStudentIds.add(matches[0].id);
+    }
+    const existing = await existingBulkArtifacts(classId, domain, students, matchedStudentIds);
+    const existingStudentIds = new Set(existing.map(item => item.studentId));
+    const policyValue = String(req.body.existingPolicy || '');
+    const existingPolicy = ['skip', 'replace', 'append'].includes(policyValue)
+      ? policyValue as BulkExistingPolicy
+      : null;
+    if (existing.length && !existingPolicy) {
+      if (req.file) fs.unlinkSync(req.file.path);
+      const conflictStudents = students
+        .filter(student => existingStudentIds.has(student.id))
+        .map(student => ({
+          studentId: student.id,
+          studentNum: student.student_num,
+          name: student.name,
+          existingCount: existing.filter(item => item.studentId === student.id).length,
+        }));
+      const results = preflightMatches.map(item => {
+        if (item.matches.length === 0) {
+          return { path: item.path, filename: item.filename, status: 'unmatched', reason: '경로에서 학번·이름을 찾지 못했습니다.' };
+        }
+        if (item.matches.length > 1) {
+          return {
+            path: item.path,
+            filename: item.filename,
+            status: 'conflict',
+            reason: `여러 학생과 일치: ${item.matches.map(student => `${student.student_num}${student.name}`).join(', ')}`,
+          };
+        }
+        const student = item.matches[0];
+        const hasExisting = existingStudentIds.has(student.id);
+        return {
+          path: item.path,
+          filename: item.filename,
+          status: hasExisting ? 'existing' : 'ready',
+          studentId: student.id,
+          student: `${student.student_num}${student.name}`,
+          reason: hasExisting
+            ? `기존 산출물 ${existing.filter(existingItem => existingItem.studentId === student.id).length}개가 있습니다.`
+            : '등록할 수 있습니다.',
+        };
+      });
+      return res.status(409).json({
+        conflict: 'existing_artifacts',
+        message: `기존 산출물이 있는 학생 ${conflictStudents.length}명이 발견되었습니다. 처리 방법을 선택하세요.`,
+        total: preflightMatches.length,
+        existingStudentCount: conflictStudents.length,
+        existingArtifactCount: existing.length,
+        readyCount: results.filter(item => item.status === 'ready').length,
+        unmatchedCount: results.filter(item => item.status === 'unmatched').length,
+        conflictCount: results.filter(item => item.status === 'conflict').length,
+        results,
+        students: conflictStudents,
+      });
+    }
+
     let count = 0;
+    const newPaths: string[] = [];
     const sampleFilenames = importEntries.map(entryFilename).filter(filename => filename && !filename.startsWith('.')).slice(0, 5);
     const importer = new ArtifactImportService(students, {
       include: (_entry, filename) => !filename.startsWith('.'),
       studentResult: student => ({ studentId: student.id, student: `${student.student_num}${student.name}` }),
-      resolve: async () => ({ kind: 'read' as const, target: undefined }),
+      resolve: async context => existingPolicy === 'skip' && existingStudentIds.has(context.student.id)
+        ? {
+            kind: 'result' as const,
+            result: {
+              path: context.path,
+              status: 'unchanged' as const,
+              studentId: context.student.id,
+              student: `${context.student.student_num}${context.student.name}`,
+              filename: context.filename,
+              reason: '기존 산출물을 유지하고 새 파일을 건너뛰었습니다.',
+            },
+          }
+        : { kind: 'read' as const, target: undefined },
       store: async context => {
         const decodedName = context.path.split(/[/\\]/).pop() || context.filename.normalize('NFC');
         const fileExt = path.extname(decodedName).toLowerCase();
-        const savePath = path.join(baseUploadDir, `${Date.now()}_${count}_${decodedName}`);
+        const savePath = uniqueArtifactPath(baseUploadDir, context.student, decodedName);
         fs.writeFileSync(savePath, context.buffer);
         const ct = TEXT_CONTENT_TYPES[fileExt] || '';
-        await assignmentExecute(
-          `INSERT INTO assignment_artifacts(assessment_student_id, domain, filename, filepath,mime_type,size)
-           VALUES(?,?,?,?,?,?)`,
-          [context.student.id, domain, decodedName, toStoredPath(savePath), ct, context.buffer.length]
-        );
+        try {
+          await assignmentExecute(
+            `INSERT INTO assignment_artifacts(assessment_student_id, domain, filename, filepath,mime_type,size)
+             VALUES(?,?,?,?,?,?)`,
+            [context.student.id, domain, decodedName, toStoredPath(savePath), ct, context.buffer.length]
+          );
+        } catch (error) {
+          try { fs.unlinkSync(savePath); } catch {}
+          throw error;
+        }
+        newPaths.push(savePath);
         count += 1;
         return { path: context.path, status: 'uploaded' as const, studentId: context.student.id, student: `${context.student.student_num}${context.student.name}`, filename: decodedName };
       },
     });
-    const imported = await importer.run(importEntries);
+    const movedFiles: Array<{ trashPath: string; originalFilepath: string }> = [];
+    let imported;
+    if (existingPolicy === 'replace' && existing.length) {
+      try {
+        imported = await assignmentTransaction(async () => {
+          const result = await importer.run(importEntries);
+          const failed = result.results.find(item => item.status === 'read_error');
+          if (failed) throw new Error(failed.reason || '새 산출물 파일을 저장하지 못했습니다.');
+
+          const movedPaths = new Set<string>();
+          for (const item of existing) {
+            if (!item.filepath || movedPaths.has(item.filepath)) continue;
+            movedPaths.add(item.filepath);
+            const trashPath = moveFileToTrash(item.filepath, 'bulk-replaced-artifacts');
+            if (trashPath) movedFiles.push({ trashPath, originalFilepath: item.filepath });
+          }
+          const artifactIds = existing.filter(item => item.source === 'artifact').map(item => item.id);
+          const submissionIds = existing.filter(item => item.source === 'assignment').map(item => item.id);
+          if (artifactIds.length) {
+            await assignmentExecute(
+              `DELETE FROM assignment_artifacts WHERE id IN (${artifactIds.map(() => '?').join(',')})`,
+              artifactIds
+            );
+          }
+          if (submissionIds.length) {
+            await assignmentExecute(
+              `DELETE FROM assignment_submissions WHERE id IN (${submissionIds.map(() => '?').join(',')})`,
+              submissionIds
+            );
+          }
+          return result;
+        });
+      } catch (error) {
+        for (const newPath of newPaths) {
+          try { if (fs.existsSync(newPath)) fs.unlinkSync(newPath); } catch {}
+        }
+        for (const moved of movedFiles.reverse()) {
+          try { restoreTrashedFile(moved.trashPath, moved.originalFilepath); } catch {}
+        }
+        throw error;
+      }
+    } else {
+      imported = await importer.run(importEntries);
+    }
     const results = imported.results;
 
     if (req.file) fs.unlinkSync(req.file.path);
@@ -393,6 +575,7 @@ router.post('/bulk-upload/:classId', upload.single('file'), async (req: Request,
       count,
       total: imported.total,
       studentCount: new Set(results.filter(result => result.status === 'uploaded').map(result => result.studentId)).size,
+      skippedCount: results.filter(result => result.status === 'unchanged').length,
       unmatchedCount: results.filter(result => result.status === 'unmatched').length,
       conflictCount: results.filter(result => result.status === 'conflict').length,
       errorCount: results.filter(result => result.status === 'read_error').length,

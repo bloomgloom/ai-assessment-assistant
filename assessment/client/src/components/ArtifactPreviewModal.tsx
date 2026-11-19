@@ -116,15 +116,26 @@ export function ArtifactPreviewStandalonePage() {
   const { source, id } = useParams();
   const [searchParams] = useSearchParams();
   const filename = searchParams.get('filename') || '';
+  const filepath = searchParams.get('filepath') || '';
   const artifact = useMemo<PreviewArtifact | null>(() => {
     if (!filename || !id || !['artifact', 'assignment', 'resource', 'activity'].includes(source || '')) return null;
     return {
       id: Number(id),
       filename,
+      filepath: filepath || undefined,
       source: source as PreviewArtifact['source'],
     };
-  }, [filename, id, source]);
+  }, [filename, filepath, id, source]);
   const preview = useArtifactPreview(artifact);
+
+  useEffect(() => {
+    if (!window.assessmentDesktop) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') window.close();
+    };
+    window.addEventListener('keydown', closeOnEscape);
+    return () => window.removeEventListener('keydown', closeOnEscape);
+  }, []);
 
   if (!artifact || !Number.isFinite(artifact.id)) {
     return <div className="flex h-screen items-center justify-center text-sm text-gray-500">미리보기 파일 정보가 올바르지 않습니다.</div>;
@@ -132,9 +143,16 @@ export function ArtifactPreviewStandalonePage() {
 
   const fileUrl = artifactFileUrl(artifact);
   return (
-    <div className="flex h-screen flex-col bg-white">
-      <div className="flex shrink-0 items-center justify-between border-b border-gray-200 px-4 py-3">
-        <span className="min-w-0 flex-1 truncate text-sm font-medium text-gray-800">{artifact.filename}</span>
+    <div className="flex h-screen w-full min-w-0 flex-1 flex-col overflow-hidden bg-white">
+      <div className="flex w-full min-w-0 shrink-0 items-center justify-between border-b border-gray-200 px-4 py-3">
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-sm font-medium text-gray-800">{artifact.filename}</div>
+          {artifact.filepath && (
+            <div className="truncate text-[11px] text-gray-500" title={artifact.filepath}>
+              저장 위치: {artifact.filepath}
+            </div>
+          )}
+        </div>
         <button
           type="button"
           onClick={() => downloadUrl(fileUrl, artifact.filename).catch(error => alert(error.message))}

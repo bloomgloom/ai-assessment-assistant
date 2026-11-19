@@ -109,6 +109,15 @@ export function ArtifactStandalonePage() {
   const [loadingCode, setLoadingCode] = useState(false);
 
   useEffect(() => {
+    if (!window.assessmentDesktop) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') window.close();
+    };
+    window.addEventListener('keydown', closeOnEscape);
+    return () => window.removeEventListener('keydown', closeOnEscape);
+  }, []);
+
+  useEffect(() => {
     if (!artifactId) return;
     (async () => {
       const r = await artifactsApi.getOne(artifactId);
@@ -127,9 +136,16 @@ export function ArtifactStandalonePage() {
   if (!artifact) return <div className="h-screen flex items-center justify-center"><Loader2 className="animate-spin text-gray-400" /></div>;
 
   return (
-    <div className="h-screen flex flex-col bg-white">
-      <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200 shrink-0">
-        <span className="min-w-0 flex-1 truncate font-medium text-sm text-gray-800">{artifact.filename}</span>
+    <div className="flex h-screen w-full min-w-0 flex-1 flex-col overflow-hidden bg-white">
+      <div className="flex w-full min-w-0 shrink-0 items-center justify-between border-b border-gray-200 px-4 py-3">
+        <div className="min-w-0 flex-1">
+          <div className="truncate font-medium text-sm text-gray-800">{artifact.filename}</div>
+          {artifact.filepath && (
+            <div className="truncate text-[11px] text-gray-500" title={artifact.filepath}>
+              저장 위치: {artifact.filepath}
+            </div>
+          )}
+        </div>
         <button
           type="button"
           onClick={() => downloadUrl(artifactsApi.fileUrl(artifact.id), artifact.filename).catch((error) => alert(error.message))}
