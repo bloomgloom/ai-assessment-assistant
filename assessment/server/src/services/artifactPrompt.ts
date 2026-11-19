@@ -209,9 +209,6 @@ export async function appendArtifactContents(
         privacyMapper.artifactName(artifact),
         { skipFirstMarkdownCell: settings.artifactStripIntroBlocksDeprecated },
       );
-      if (!evidence.executionSucceeded) {
-        throw new Error(`${promptLabel} 노트북 재실행 실패: ${evidence.executionError || '원인을 확인할 수 없습니다.'}`);
-      }
       const text = privacyMapper.sanitizeText(evidence.text);
       if (text) {
         parts.push(`[${promptLabel}]\n${text}\n---`);
@@ -242,9 +239,6 @@ export async function appendArtifactContents(
             artifacts.map(item => ({ ...item, filepath: resolveStoredPath(item.filepath) })),
             privacyMapper.artifactName(artifact),
           );
-          if (!evidence.executionSucceeded) {
-            throw new Error(`${promptLabel} Python 실행 실패: ${evidence.executionError || '원인을 확인할 수 없습니다.'}`);
-          }
           executionText = `\n${privacyMapper.sanitizeText(evidence.text)}`;
         }
         parts.push(`[${promptLabel}]\n\`\`\`${codeExts[ext]}\n${code}\n\`\`\`${executionText}\n---`);

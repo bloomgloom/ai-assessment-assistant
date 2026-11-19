@@ -10,7 +10,7 @@ import { ensureDir, storagePath } from './storage';
 
 const execFileAsync = promisify(execFile);
 const artifactExecutionQueue = new SerialTaskQueue();
-const NOTEBOOK_CACHE_VERSION = 5;
+const NOTEBOOK_CACHE_VERSION = 6;
 const notebookCacheDir = storagePath('cache', 'artifact-execution');
 
 export interface EvidenceArtifact {
@@ -111,7 +111,12 @@ function truncate(value: string, maxChars: number): string {
   return `${value.slice(0, maxChars)}\n...(truncated ${value.length - maxChars} chars)`;
 }
 
-async function runPythonScript(script: string, args: string[], timeoutMs: number): Promise<PythonRunResult> {
+async function runPythonScript(
+  script: string,
+  args: string[],
+  timeoutMs: number,
+  extraEnv: Record<string, string> = {},
+): Promise<PythonRunResult> {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'assessment-evidence-'));
   const mplConfigDir = path.join(dir, 'matplotlib');
   const scriptPath = path.join(dir, 'evidence.py');
@@ -127,14 +132,22 @@ async function runPythonScript(script: string, args: string[], timeoutMs: number
     let lastError: unknown = null;
     for (const pythonPath of candidates) {
       try {
+        const pythonDir = path.dirname(pythonPath);
         return await execFileAsync(pythonPath, [scriptPath, ...args], {
           timeout: timeoutMs,
           maxBuffer: 20 * 1024 * 1024,
-          env: { ...process.env, MPLCONFIGDIR: mplConfigDir },
+          env: {
+            ...process.env,
+            ...extraEnv,
+            PATH: [pythonDir, process.env.PATH || ''].filter(Boolean).join(path.delimiter),
+            MPLCONFIGDIR: mplConfigDir,
+          },
         });
       } catch (e) {
         lastError = e;
-        const error = e as NodeJS.ErrnoException;
+        const error = e as NodeJS.ErrnoException & { killed?: boolean; signal?: string | null };
+        if (error.killed) throw new Error(`Python 실행 시간이 ${Math.round(timeoutMs / 1000)}초를 초과했습니다.`);
+        if (error.signal) throw new Error(`Python 프로세스가 ${error.signal} 신호로 비정상 종료되었습니다.`);
         if (error.code !== 'ENOENT') throw e;
       }
     }
@@ -388,6 +401,7 @@ def collect_cells(nb, image_dir, image_prefix, skip_first_markdown):
         cells.append(item)
     return {"cells": cells, "image_count": image_count, "error_count": error_count}
 
+saved = None
 try:
     notebook_path = sys.argv[1]
     work_dir = sys.argv[2]
@@ -402,9 +416,15 @@ try:
 
     client = NotebookClient(
         nb,
-        timeout=120,
+        timeout=60,
         kernel_name="python3",
         allow_errors=True,
+        interrupt_on_timeout=True,
+        error_on_timeout={
+            "ename": "CellTimeoutError",
+            "evalue": "이 셀은 앱 실행 제한 시간 60초를 초과했습니다.",
+            "traceback": ["셀 실행을 중단하고 다음 셀을 계속 실행했습니다."],
+        },
         resources={"metadata": {"path": work_dir}},
     )
     client.execute()
@@ -412,12 +432,12 @@ try:
     rerun = collect_cells(nb, image_dir, "rerun", skip_first_markdown)
     print(json.dumps({"ok": True, "saved": saved, "rerun": rerun}, ensure_ascii=False))
 except Exception as exc:
-    print(json.dumps({"ok": False, "error": str(exc), "traceback": traceback.format_exc()}, ensure_ascii=False))
+    print(json.dumps({"ok": False, "saved": saved, "error": str(exc), "traceback": traceback.format_exc()}, ensure_ascii=False))
 `;
 
 export async function buildTabularDataEvidence(artifact: EvidenceArtifact): Promise<string> {
   try {
-    const result = parsePythonJson((await runPythonScript(TABULAR_SUMMARY_SCRIPT, [artifact.filepath], 120000)).stdout) as {
+    const result = parsePythonJson((await runPythonScript(TABULAR_SUMMARY_SCRIPT, [artifact.filepath], 300000)).stdout) as {
       ok?: boolean;
       error?: string;
       [key: string]: unknown;
@@ -462,16 +482,47 @@ function appendNotebookSection(lines: string[], title: string, section: any): vo
 
 function formatNotebookEvidence(result: any): string {
   if (!result?.ok) {
-    return `[노트북 실행 evidence]\n노트북 실행 실패 또는 생략: ${result?.error || 'unknown error'}${result?.traceback ? `\n${truncate(result.traceback, 3000)}` : ''}`;
+    const lines = [
+      '[노트북 실행 참고자료]',
+      '학생이 저장한 결과와 앱 재실행 결과는 참고자료이며 정답으로 간주하지 않습니다. 재실행 오류로 확인하지 못한 부분은 제출 코드와 저장 결과를 함께 검토해 판단하세요.',
+    ];
+    if (result?.saved) appendNotebookSection(lines, '학생이 저장한 기존 ipynb 출력', result.saved);
+    lines.push(`\n[앱 재실행 결과 수집 실패]\n${result?.error || 'unknown error'}${result?.traceback ? `\n${truncate(result.traceback, 3000)}` : ''}`);
+    return truncate(lines.join('\n'), 42000);
   }
 
   const lines: string[] = [
-    '[노트북 실행 evidence]',
-    '제출된 ipynb 내부에 저장된 기존 출력과 현재 제출 파일 기준 재실행 출력을 구분해 제공합니다.',
+    '[노트북 실행 참고자료]',
+    '학생이 저장한 결과와 앱 재실행 결과를 구분해 제공합니다. 두 결과는 참고자료이며 정답으로 간주하지 않습니다.',
+    '재실행 오류로 확인하지 못한 부분은 제출 코드와 저장 결과를 함께 검토하여 채점 기준에 따라 판단하세요.',
   ];
   appendNotebookSection(lines, '저장된 기존 ipynb 출력', result.saved);
   appendNotebookSection(lines, '현재 제출 파일 기준 재실행 출력', result.rerun);
   return truncate(lines.join('\n'), 42000);
+}
+
+function savedNotebookFallback(filepath: string): string {
+  try {
+    const notebook = JSON.parse(fs.readFileSync(filepath, 'utf8')) as { cells?: any[] };
+    const lines: string[] = ['[학생이 저장한 기존 ipynb 출력]'];
+    for (const [index, cell] of (notebook.cells || []).entries()) {
+      if (cell.cell_type !== 'code') continue;
+      const outputs: string[] = [];
+      for (const output of cell.outputs || []) {
+        if (output.output_type === 'stream') outputs.push(`[stdout:${output.name || 'stream'}]\n${String(Array.isArray(output.text) ? output.text.join('') : output.text || '')}`);
+        else if (output.output_type === 'error') outputs.push(`[error] ${output.ename || 'Error'}: ${output.evalue || ''}\n${Array.isArray(output.traceback) ? output.traceback.join('\n') : output.traceback || ''}`);
+        else if (output.output_type === 'execute_result' || output.output_type === 'display_data') {
+          const plain = output.data?.['text/plain'];
+          if (plain) outputs.push(`[result]\n${Array.isArray(plain) ? plain.join('') : plain}`);
+          if (output.data?.['image/png']) outputs.push('[image output] 저장된 이미지 출력 있음');
+        }
+      }
+      if (outputs.length) lines.push(`\n[Code Cell ${index + 1}]\n${outputs.join('\n')}`);
+    }
+    return truncate(lines.join('\n'), 20000);
+  } catch {
+    return '[학생이 저장한 기존 ipynb 출력]\n저장 결과를 읽지 못했습니다.';
+  }
 }
 
 export function notebookExecutionFailure(result: any): string | null {
@@ -505,7 +556,7 @@ export async function buildNotebookExecutionEvidence(
         workDir,
         imageDir,
         options.skipFirstMarkdownCell ? '1' : '0',
-      ], 600000)).stdout;
+      ], 300000, { AI_ASSESSMENT_TEST_INPUT: '1' })).stdout;
       const result = parsePythonJson(stdout);
       const executionError = notebookExecutionFailure(result);
       const attachments = fs.readdirSync(imageDir)
@@ -530,7 +581,7 @@ export async function buildNotebookExecutionEvidence(
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
       return {
-        text: `[노트북 실행 evidence]\n노트북 실행 실패 또는 생략: ${message}`,
+        text: `[노트북 실행 참고자료]\n학생이 저장한 결과와 앱 재실행 결과는 참고자료이며 정답으로 간주하지 않습니다. 재실행 오류로 확인하지 못한 부분은 제출 코드와 저장 결과를 함께 검토해 판단하세요.\n${savedNotebookFallback(notebook.filepath)}\n\n[앱 재실행 결과 수집 실패]\n${message}`,
         attachments: [],
         executionSucceeded: false,
         executionError: message,
@@ -544,7 +595,8 @@ export async function buildNotebookExecutionEvidence(
 
 function pythonScriptEvidence(stdout: string, stderr: string, exitCode: number): string {
   const lines = [
-    '[Python 파일 실행 결과]',
+    '[Python 파일 실행 참고자료]',
+    '앱 재실행 결과는 참고자료이며 정답으로 간주하지 않습니다. 오류로 확인하지 못한 부분은 제출 코드를 함께 검토하여 채점 기준에 따라 판단하세요.',
     `종료 코드: ${exitCode}`,
     `[stdout]\n${truncate(stdout.trim() || '(출력 없음)', 12000)}`,
   ];
@@ -559,16 +611,17 @@ async function executePythonFile(scriptPath: string, workDir: string): Promise<{
     try {
       const result = await execFileAsync(pythonPath, [scriptPath], {
         cwd: workDir,
-        timeout: Math.max(100, Number(process.env.PYTHON_EXECUTION_TIMEOUT_MS) || 600000),
+        timeout: Math.max(100, Number(process.env.PYTHON_EXECUTION_TIMEOUT_MS) || 300000),
         maxBuffer: 20 * 1024 * 1024,
-        env: { ...process.env, MPLCONFIGDIR: path.join(workDir, '.matplotlib') },
+        env: { ...process.env, AI_ASSESSMENT_TEST_INPUT: '1', MPLCONFIGDIR: path.join(workDir, '.matplotlib') },
       });
       return { stdout: result.stdout, stderr: result.stderr, exitCode: 0 };
     } catch (error) {
       lastError = error;
       const failure = error as NodeJS.ErrnoException & { stdout?: string; stderr?: string; killed?: boolean; signal?: string | null };
       if (failure.code === 'ENOENT') continue;
-      if (failure.killed || failure.signal) throw new Error('Python 파일 실행 시간이 제한을 초과했거나 프로세스가 비정상 종료되었습니다.');
+      if (failure.killed) throw new Error('Python 파일 전체 실행 시간이 300초를 초과했습니다.');
+      if (failure.signal) throw new Error(`Python 파일 프로세스가 ${failure.signal} 신호로 비정상 종료되었습니다.`);
       if (typeof failure.code === 'number') {
         return { stdout: String(failure.stdout || ''), stderr: String(failure.stderr || failure.message || ''), exitCode: failure.code };
       }
@@ -607,7 +660,7 @@ export async function buildPythonFileExecutionEvidence(
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       return {
-        text: `[Python 파일 실행 결과]\n실행 결과 수집 실패: ${message}`,
+        text: `[Python 파일 실행 참고자료]\n앱 재실행 결과는 참고자료이며 정답으로 간주하지 않습니다. 실행 오류로 확인하지 못한 부분은 제출 코드를 함께 검토하여 채점 기준에 따라 판단하세요.\n실행 결과 수집 실패: ${message}`,
         attachments: [],
         executionSucceeded: false,
         executionError: message,

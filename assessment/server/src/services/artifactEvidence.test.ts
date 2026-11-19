@@ -6,7 +6,8 @@ import path from 'node:path';
 async function run(): Promise<void> {
   const storageDir = fs.mkdtempSync(path.join(os.tmpdir(), 'artifact-evidence-storage-test-'));
   process.env.APP_STORAGE_DIR = storageDir;
-  process.env.ASSESSMENT_PYTHON = process.env.PYTHON_TEST_EXECUTABLE || 'python3';
+  const projectPython = path.resolve(__dirname, '../../../python/.venv/bin/python3');
+  process.env.ASSESSMENT_PYTHON = process.env.PYTHON_TEST_EXECUTABLE || (fs.existsSync(projectPython) ? projectPython : 'python3');
   const runtime = require('./artifactEvidence') as typeof import('./artifactEvidence');
   const { notebookEvidenceCacheKey, notebookExecutionFailure } = runtime;
   assert.equal(notebookExecutionFailure({ ok: true, rerun: { error_count: 0, cells: [] } }), null);
@@ -43,6 +44,26 @@ async function run(): Promise<void> {
     fs.writeFileSync(dataPath, 'a\n2\n');
     const changed = await notebookEvidenceCacheKey(notebook, artifacts, 'file_001.ipynb');
     assert.notEqual(first, changed);
+
+    if (process.env.RUN_NOTEBOOK_INTEGRATION_TEST === '1') {
+      const notebookWithError = path.join(dir, 'continue-after-error.ipynb');
+      fs.writeFileSync(notebookWithError, JSON.stringify({
+        nbformat: 4,
+        nbformat_minor: 5,
+        metadata: { kernelspec: { display_name: 'Python 3', language: 'python', name: 'python3' } },
+        cells: [
+          { cell_type: 'code', execution_count: null, metadata: {}, outputs: [], source: ['raise ValueError("student error")'] },
+          { cell_type: 'code', execution_count: null, metadata: {}, outputs: [], source: ['import os\nprint("flag=" + os.environ.get("AI_ASSESSMENT_TEST_INPUT", ""))'] },
+          { cell_type: 'code', execution_count: null, metadata: {}, outputs: [], source: ['print("continued")'] },
+        ],
+      }));
+      const notebookArtifact = { filename: 'continue-after-error.ipynb', filepath: notebookWithError };
+      const notebookEvidence = await runtime.buildNotebookExecutionEvidence(notebookArtifact, [notebookArtifact], 'file_001.ipynb');
+      assert.equal(notebookEvidence.executionSucceeded, true, notebookEvidence.executionError || notebookEvidence.text);
+      assert.match(notebookEvidence.text, /ValueError: student error/);
+      assert.match(notebookEvidence.text, /flag=1/);
+      assert.match(notebookEvidence.text, /continued/);
+    }
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -77,7 +98,7 @@ async function run(): Promise<void> {
       'file_001.py',
     );
     assert.equal(timeoutEvidence.executionSucceeded, false);
-    assert.match(timeoutEvidence.executionError || '', /제한을 초과|비정상 종료/);
+    assert.match(timeoutEvidence.executionError || '', /300초를 초과|비정상 종료/);
   } finally {
     delete process.env.CACHE_COUNTER_PATH;
     delete process.env.PYTHON_EXECUTION_TIMEOUT_MS;

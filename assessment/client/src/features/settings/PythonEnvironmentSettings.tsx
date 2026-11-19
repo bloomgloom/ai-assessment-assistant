@@ -24,6 +24,40 @@ interface RuntimeEvent {
 }
 
 const requirementsText = (requirements: string[]) => requirements.join('\n');
+const automaticInputGuide = `import os
+import builtins
+
+# 학생이 직접 자동 입력을 시험할 때만 True
+USE_TEST_INPUTS = False
+
+# 실제로 시험한 입력값을 input() 호출 순서대로 작성
+TEST_INPUTS = [
+    "홍길동",
+    "17",
+]
+
+if not hasattr(builtins, "_assessment_original_input"):
+    builtins._assessment_original_input = builtins.input
+
+use_automatic_input = (
+    USE_TEST_INPUTS
+    or os.environ.get("AI_ASSESSMENT_TEST_INPUT") == "1"
+)
+
+if use_automatic_input:
+    _test_values = iter(TEST_INPUTS)
+
+    def automatic_input(prompt=""):
+        try:
+            value = next(_test_values)
+        except StopIteration:
+            raise RuntimeError("자동 실행용 입력값이 부족합니다.")
+        print(f"{prompt}{value}")
+        return value
+
+    builtins.input = automatic_input
+else:
+    builtins.input = builtins._assessment_original_input`;
 
 export function PythonEnvironmentSettings() {
   const [state, setState] = useState<PythonRuntimeState | null>(null);
@@ -180,6 +214,21 @@ export function PythonEnvironmentSettings() {
 
         {error && <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs whitespace-pre-wrap text-red-700">{error}</div>}
         {state?.runtimeDir && <p className="text-xs text-gray-400">저장 위치: <code>{state.runtimeDir}</code></p>}
+      </div>
+
+      <div className="card space-y-4 p-6">
+        <div>
+          <h3 className="text-sm font-semibold text-gray-800">자동 입력 테스트 안내</h3>
+          <p className="mt-1 text-xs leading-5 text-gray-500">
+            아래 코드를 활동지의 첫 코드 셀 또는 Python 파일 위쪽에 넣으세요. 학생이 직접 실행할 때는 입력창을 사용하고,
+            학생이 토글을 켜거나 채점 앱이 실행할 때는 <code>TEST_INPUTS</code> 값을 순서대로 사용합니다.
+          </p>
+        </div>
+        <div className="rounded-md border border-blue-100 bg-blue-50 px-3 py-2 text-xs leading-5 text-blue-800">
+          채점 앱은 실행할 때 <code>AI_ASSESSMENT_TEST_INPUT=1</code>을 자동으로 설정합니다. 학생은 <code>USE_TEST_INPUTS</code>를
+          <code> True</code>로 바꾸어 같은 자동 입력을 직접 시험할 수 있습니다.
+        </div>
+        <pre className="max-h-96 overflow-auto rounded-lg bg-gray-950 p-4 text-xs leading-5 text-gray-100"><code>{automaticInputGuide}</code></pre>
       </div>
 
       {installing && (
