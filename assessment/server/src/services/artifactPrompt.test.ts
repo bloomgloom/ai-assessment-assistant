@@ -1,5 +1,11 @@
 import assert from 'node:assert/strict';
-import { createArtifactPrivacyMapper, prepareArtifactPromptContents, type ArtifactRow } from './artifactPrompt';
+import {
+  artifactIntroStripOptions,
+  createArtifactPrivacyMapper,
+  extractIpynbInputText,
+  prepareArtifactPromptContents,
+  type ArtifactRow,
+} from './artifactPrompt';
 
 function artifact(id: number, filename: string): ArtifactRow {
   return { id, filename, filepath: `/tmp/${filename}`, mime_type: 'text/plain' };
@@ -25,9 +31,27 @@ async function run(): Promise<void> {
     '다시 읽기: file_001.csv',
   );
 
+  assert.deepEqual(
+    artifactIntroStripOptions({ artifactStripIntroBlocks: true, pdfRedactionTopCm: 0 }),
+    { skipFirstTableRow: true, skipFirstMarkdownCell: true },
+  );
+  assert.deepEqual(
+    artifactIntroStripOptions({ artifactStripIntroBlocks: false, pdfRedactionTopCm: 0 }),
+    { skipFirstTableRow: false, skipFirstMarkdownCell: false },
+  );
+
+  const notebook = Buffer.from(JSON.stringify({
+    cells: [
+      { cell_type: 'markdown', source: ['이름: 홍길동\n', '학번: 10101'] },
+      { cell_type: 'code', source: ['print("학생 코드")'] },
+    ],
+  }));
+  const maskedNotebookText = extractIpynbInputText(notebook, { skipFirstMarkdownCell: true });
+  assert.doesNotMatch(maskedNotebookText, /홍길동|10101/);
+  assert.match(maskedNotebookText, /print\("학생 코드"\)/);
+
   const preparation = await prepareArtifactPromptContents([], [], {
     artifactStripIntroBlocks: true,
-    artifactStripIntroBlocksDeprecated: false,
     pdfRedactionTopCm: 0,
   });
   assert.deepEqual(preparation, { ok: true, hasContent: false, attachments: [] });

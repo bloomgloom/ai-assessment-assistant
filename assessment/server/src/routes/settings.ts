@@ -171,7 +171,6 @@ router.put('/', async (req: Request, res: Response) => {
     anthropicOutputOptions,
     loggingEnabled,
     artifactStripIntroBlocks,
-    artifactStripIntroBlocksDeprecated,
     pdfRedactionTopCm,
     aiEnabled,
     providerSettings,
@@ -272,10 +271,6 @@ router.put('/', async (req: Request, res: Response) => {
 
   if (artifactStripIntroBlocks != null) {
     pairs.push(['artifact_strip_intro_blocks', String(artifactStripIntroBlocks)]);
-  }
-
-  if (artifactStripIntroBlocksDeprecated != null) {
-    pairs.push(['artifact_strip_intro_blocks_deprecated', String(artifactStripIntroBlocksDeprecated)]);
   }
 
   if (pdfRedactionTopCm != null) {
@@ -474,7 +469,6 @@ router.post('/test', async (req: Request, res: Response) => {
         sequentialMode: (parseInt(String(body.maxConcurrency), 10) || 1) <= 1,
         loggingEnabled: body.loggingEnabled !== false,
         artifactStripIntroBlocks: body.artifactStripIntroBlocks !== false,
-        artifactStripIntroBlocksDeprecated: body.artifactStripIntroBlocksDeprecated === true,
         pdfRedactionTopCm: Math.max(0, Math.min(30, parseFloat(String(body.pdfRedactionTopCm ?? '0')) || 0)),
         aiEnabled: true,
       } : undefined,

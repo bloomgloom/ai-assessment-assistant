@@ -12,6 +12,7 @@ import { useAcademicTreeController } from '../hooks/useAcademicTreeController';
 import { aiApi, lessonPlansApi, type AcademicSubjectScope } from '../lib/api';
 import { saveBlob } from '../lib/desktopFiles';
 import { downloadFilename, treeBackupFilename } from '../lib/backupFilename';
+import { hasSaveChanges } from '../lib/saveChanges';
 import { useRecordsUnsavedStore } from '../stores/recordsUnsavedStore';
 
 interface LessonSubject extends AcademicSubjectScope { has_source: number }
@@ -227,6 +228,7 @@ export default function LessonPlansPage({ embeddedSubject, embeddedTab }: Lesson
 
   const handleSave = async () => {
     if (!selected) return;
+    if (!hasSaveChanges(isDirty)) return;
     setSaving(true);
     try {
       await lessonPlansApi.saveSettings(selected, settings as any);

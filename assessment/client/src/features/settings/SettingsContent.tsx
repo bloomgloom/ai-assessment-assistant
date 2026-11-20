@@ -126,7 +126,7 @@ export function SettingsContent({
             <span className="text-sm font-medium text-gray-700">산출물 개인정보 가리기</span>
           </label>
           <p className="text-xs text-gray-400 mt-1 ml-6">
-            켜면 코드 파일 맨 앞의 블록 주석이나 docstring을 AI 입력에서 제외하고, PDF 상단 가림 설정을 적용합니다.
+            켜면 코드 파일의 첫 블록 주석·docstring, HWPX 첫 표 행, IPYNB 첫 마크다운 셀을 AI 입력에서 제외하고 PDF 상단 가림 설정을 적용합니다.
           </p>
           <div className="mt-3 ml-6 space-y-2">
             <div className="flex items-center justify-between gap-3">
@@ -167,21 +167,6 @@ export function SettingsContent({
           </div>
         </div>
 
-        <div>
-          <label className="flex items-center gap-2 cursor-pointer">
-            <input
-              type="checkbox"
-              className="w-4 h-4 rounded"
-              checked={settings.artifactStripIntroBlocksDeprecated}
-              disabled={inputOptionsSaving || aiDisabled}
-              onChange={(e) => handleInputOptionChange('artifactStripIntroBlocksDeprecated', e.target.checked)}
-            />
-            <span className="text-sm font-medium text-gray-700">산출물 개인정보 가리기 (deprecated)</span>
-          </label>
-          <p className="text-xs text-gray-400 mt-1 ml-6">
-            임시 옵션입니다. 켜면 HWPX 첫 표 행과 IPYNB 첫 마크다운 셀만 기존 방식으로 AI 입력에서 제외합니다.
-          </p>
-        </div>
       </div>
       </div>
 

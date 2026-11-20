@@ -4,6 +4,7 @@ import { saveBlob } from '../../lib/desktopFiles';
 import { downloadFilename } from '../../lib/backupFilename';
 import { ANTHROPIC_OUTPUT_TASKS, DEFAULT_MODELS, DEFAULT_TEMPERATURES, DEFAULT_URLS, supportsTemperature } from './constants';
 import { AiTemperatures, AnthropicEffort, AnthropicOutputOptions, AnthropicOutputTask, GeminiThinkingLevel, OpenAIReasoningEffort, SettingsState } from './types';
+import { hasSaveChanges } from '../../lib/saveChanges';
 
 function providerTemperatureMax(provider: string) {
   return provider === 'anthropic' ? 1 : 2;
@@ -115,7 +116,6 @@ export function useSettingsController() {
     providerSettings: {},
     loggingEnabled: true,
     artifactStripIntroBlocks: true,
-    artifactStripIntroBlocksDeprecated: false,
     pdfRedactionTopCm: 0,
     aiEnabled: false,
     assignmentTeacherPasswordSet: false,
@@ -125,6 +125,7 @@ export function useSettingsController() {
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
   const [saved, setSaved] = useState(false);
+  const [savedSettingsSignature, setSavedSettingsSignature] = useState('');
   const [testedSignature, setTestedSignature] = useState('');
   const [resetting, setResetting] = useState(false);
   const [resetConfirm, setResetConfirm] = useState(false);
@@ -140,7 +141,7 @@ export function useSettingsController() {
     settingsApi.get().then((r) => {
       const data = r.data as SettingsState;
       const provider = data.provider || 'anthropic';
-      setSettings({
+      const loadedSettings: SettingsState = {
         ...data,
         providerSettings: data.providerSettings || {},
         temperatureEnabled: data.temperatureEnabled === true,
@@ -151,12 +152,13 @@ export function useSettingsController() {
         outputReasoningEffort: normalizeOpenAIReasoningEffort(data.outputReasoningEffort),
         anthropicOutputOptions: normalizeAnthropicOutputOptions(data.anthropicOutputOptions),
         artifactStripIntroBlocks: data.artifactStripIntroBlocks !== false,
-        artifactStripIntroBlocksDeprecated: data.artifactStripIntroBlocksDeprecated === true,
         pdfRedactionTopCm: Math.max(0, Math.min(30, Number(data.pdfRedactionTopCm) || 0)),
         aiEnabled: data.aiEnabled === true,
         assignmentTeacherPasswordSet: data.assignmentTeacherPasswordSet === true,
         assignmentUploadApprovalMb: Math.max(1, Number(data.assignmentUploadApprovalMb) || 50),
-      });
+      };
+      setSettings(loadedSettings);
+      setSavedSettingsSignature(settingsSaveSignature(loadedSettings));
     });
   }, []);
 
@@ -231,6 +233,16 @@ export function useSettingsController() {
     },
   });
 
+  const settingsSaveSignature = (value: SettingsState) => {
+    const {
+      loggingEnabled: _loggingEnabled,
+      artifactStripIntroBlocks: _artifactStripIntroBlocks,
+      pdfRedactionTopCm: _pdfRedactionTopCm,
+      ...saveButtonSettings
+    } = withCurrentProviderSettings(value);
+    return JSON.stringify(saveButtonSettings);
+  };
+
   const getConnectionSignature = (value: SettingsState) => JSON.stringify({
     provider: value.provider,
     apiKey: value.apiKeys?.[value.provider] || value.apiKey || '',
@@ -262,10 +274,11 @@ export function useSettingsController() {
   };
 
   const handleSave = async () => {
+    const payload = withCurrentProviderSettings(settings);
+    if (!hasSaveChanges(settingsSaveSignature(payload) !== savedSettingsSignature)) return;
     setSaving(true);
     setSaved(false);
     try {
-      const payload = withCurrentProviderSettings(settings);
       const invalidAnthropicMaxTokens = ['anthropic', 'gemini', 'openai'].includes(payload.provider)
         && payload.anthropicMaxTokens === '';
       if (invalidAnthropicMaxTokens) {
@@ -278,7 +291,9 @@ export function useSettingsController() {
       }
       const r = await settingsApi.update(payload as unknown as Record<string, unknown>);
       const storage = r.data?.storage ?? settings.storage;
-      setSettings((s) => ({ ...withCurrentProviderSettings(s), storage }));
+      const savedSettings = { ...payload, storage };
+      setSettings(savedSettings);
+      setSavedSettingsSignature(settingsSaveSignature(savedSettings));
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
     } finally {
@@ -287,13 +302,14 @@ export function useSettingsController() {
   };
 
   const handleInputOptionChange = async (
-    key: 'loggingEnabled' | 'artifactStripIntroBlocks' | 'artifactStripIntroBlocksDeprecated' | 'aiEnabled' | 'pdfRedactionTopCm',
+    key: 'loggingEnabled' | 'artifactStripIntroBlocks' | 'aiEnabled' | 'pdfRedactionTopCm',
     value: boolean | number,
   ) => {
     const previousValue = settings[key];
+    const nextSettings = { ...settings, [key]: value };
     setTestResult(null);
     setTestedSignature('');
-    setSettings((s) => ({ ...s, [key]: value }));
+    setSettings(nextSettings);
     setInputOptionsSaving(true);
     try {
       if (key === 'aiEnabled') return;

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { AlertTriangle, CheckCircle, Loader2, Save, Terminal } from 'lucide-react';
 import { AiProgressOverlay } from '../../components/common/AiProgressOverlay';
 import { startDisplaySleepPrevention, stopDisplaySleepPrevention } from '../../lib/displaySleepPrevention';
+import { hasSaveChanges } from '../../lib/saveChanges';
 
 interface PythonRuntimeState {
   ready: boolean;
@@ -24,6 +25,11 @@ interface RuntimeEvent {
 }
 
 const requirementsText = (requirements: string[]) => requirements.join('\n');
+const normalizedRequirements = (value: string) => value
+  .split(/\r?\n/)
+  .map(line => line.trim())
+  .filter(Boolean)
+  .join('\n');
 const automaticInputGuide = `import os
 import builtins
 
@@ -90,6 +96,7 @@ export function PythonEnvironmentSettings() {
   }, []);
 
   const applyRequirements = async () => {
+    if (!hasSaveChanges(normalizedRequirements(requirements) !== requirementsText(state?.requirements || []))) return;
     setInstalling(true);
     setError('');
     setSaved(false);

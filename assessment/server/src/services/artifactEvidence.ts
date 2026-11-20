@@ -165,6 +165,7 @@ function parsePythonJson(stdout: string): unknown {
 
 const TABULAR_SUMMARY_SCRIPT = String.raw`
 import json
+import math
 import os
 import sys
 
@@ -182,10 +183,19 @@ def as_jsonable(value):
         pass
     if hasattr(value, "item"):
         try:
-            return value.item()
+            value = value.item()
         except Exception:
             pass
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
     return str(value) if not isinstance(value, (str, int, float, bool, type(None))) else value
+
+def sanitize_json(value):
+    if isinstance(value, dict):
+        return {str(key): sanitize_json(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [sanitize_json(item) for item in value]
+    return as_jsonable(value)
 
 def read_frame(file_path, ext):
     if ext in ("xlsx", "xls"):
@@ -319,7 +329,7 @@ try:
             str(key): int(value) for key, value in counts.items()
         }
 
-    print(json.dumps(result, ensure_ascii=False, default=str))
+    print(json.dumps(sanitize_json(result), ensure_ascii=False, default=str, allow_nan=False))
 except Exception as exc:
     print(json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False))
 `;

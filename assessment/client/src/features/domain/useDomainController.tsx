@@ -25,6 +25,7 @@ import {
 import { useDomainDomainsUpload } from './useDomainDomainsUpload';
 import { useDomainTree } from './useDomainTree';
 import { useRecordsUnsavedStore } from '../../stores/recordsUnsavedStore';
+import { hasSaveChanges } from '../../lib/saveChanges';
 
 function domainSelectionPayload(sub: SubjectItem, domain: string | null) {
   return {
@@ -365,6 +366,7 @@ export function useDomainController() {
 
   const handleSave = async (): Promise<boolean> => {
     if (!selectedSubject) return false;
+    if (!hasSaveChanges(isDirty)) return false;
     if (activeTab === 'assignment') {
       setSaving(true);
       try {

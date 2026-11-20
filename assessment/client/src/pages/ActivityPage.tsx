@@ -19,6 +19,7 @@ import { openDirectory, saveBlob } from '../lib/desktopFiles';
 import { downloadFilename, treeBackupFilename } from '../lib/backupFilename';
 import { openArtifactPreview } from '../lib/artifactPreview';
 import { bulkExistingPolicyActions, isExistingArtifactsConflict, type BulkExistingPolicy } from '../lib/bulkArtifactImport';
+import { hasSaveChanges } from '../lib/saveChanges';
 import { useAiBatchStore, type ActivityGenerationRequest } from '../stores/aiBatchStore';
 import { useRecordsUnsavedStore } from '../stores/recordsUnsavedStore';
 
@@ -305,10 +306,7 @@ export default function ActivityPage() {
   };
   const saveAll = async () => {
     if (!classId || saving) return;
-    if (!isDirty) {
-      alert('변경 내용이 없습니다.');
-      return;
-    }
+    if (!hasSaveChanges(isDirty)) return;
     if (dates.some(date => !/^\d{4}-\d{2}-\d{2}$/.test(date.activity_date) || Number(date.lesson_no) <= 0)) return alert('날짜와 차시를 확인해 주세요.');
     if (new Set(dates.map(date => date.activity_date)).size !== dates.length) return alert('같은 날짜의 수업을 두 번 만들 수 없습니다.');
     setSaving(true);

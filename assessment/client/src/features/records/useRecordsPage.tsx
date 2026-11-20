@@ -19,6 +19,7 @@ import { useResizableTable } from '../../components/common/useResizableTable';
 import { RecordsFrozenHeader, RecordsFrozenStudentCells, recordsFrozenLayout } from '../../components/common/RecordsTableFrozenColumns';
 import { ClaudeBatchResultsDialog, type ClaudeBatchResultJob } from '../../components/common/ClaudeBatchResultsDialog';
 import { bulkExistingPolicyActions, isExistingArtifactsConflict, type BulkExistingPolicy } from '../../lib/bulkArtifactImport';
+import { hasSaveChanges } from '../../lib/saveChanges';
 
 const ArtifactViewer = lazy(() => import('../../components/ArtifactViewer'));
 
@@ -798,10 +799,7 @@ export function useRecordsPage() {
 
   const handleSaveAll = async () => {
     if (!selectedClass) return;
-    if (!isDirty) {
-      alert('변경 내용이 없습니다.');
-      return;
-    }
+    if (!hasSaveChanges(isDirty)) return;
     setSaving(true);
     try {
       const promises = [];

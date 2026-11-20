@@ -68,6 +68,21 @@ async function run(): Promise<void> {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 
+  const tabularDir = fs.mkdtempSync(path.join(os.tmpdir(), 'tabular-evidence-test-'));
+  try {
+    const csvPath = path.join(tabularDir, 'missing-numeric-values.csv');
+    fs.writeFileSync(csvPath, 'name,value\nalpha,\nbeta,1.5\ngamma,\n');
+    const evidence = await runtime.buildTabularDataEvidence({
+      filename: 'missing-numeric-values.csv',
+      filepath: csvPath,
+    });
+    assert.match(evidence, /\[데이터 요약 evidence: pandas\]/);
+    assert.match(evidence, /"value": null/);
+    assert.doesNotMatch(evidence, /요약 생성 실패|:\s*(?:NaN|Infinity|-Infinity)\b/);
+  } finally {
+    fs.rmSync(tabularDir, { recursive: true, force: true });
+  }
+
   const pythonDir = fs.mkdtempSync(path.join(os.tmpdir(), 'python-file-evidence-test-'));
   try {
     const errorPath = path.join(pythonDir, 'student_error.py');

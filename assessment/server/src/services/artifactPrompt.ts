@@ -12,6 +12,15 @@ export interface ArtifactRow {
   mime_type: string;
 }
 
+type ArtifactPrivacySettings = Pick<LLMSettings, 'artifactStripIntroBlocks' | 'pdfRedactionTopCm'>;
+
+export function artifactIntroStripOptions(settings: ArtifactPrivacySettings) {
+  return {
+    skipFirstTableRow: settings.artifactStripIntroBlocks,
+    skipFirstMarkdownCell: settings.artifactStripIntroBlocks,
+  };
+}
+
 const FILE_REFERENCE_EXTENSIONS = [
   'csv', 'tsv', 'xlsx', 'xls', 'json', 'txt', 'md', 'ipynb', 'py', 'js', 'ts', 'html', 'css',
   'xml', 'sql', 'pkl', 'pickle', 'parquet', 'png', 'jpg', 'jpeg', 'gif', 'webp', 'pdf', 'hwpx',
@@ -109,7 +118,7 @@ function normalizeNotebookSource(source: unknown): string {
   return typeof source === 'string' ? source : '';
 }
 
-function extractIpynbInputText(buffer: Buffer, options: { skipFirstMarkdownCell?: boolean } = {}): string {
+export function extractIpynbInputText(buffer: Buffer, options: { skipFirstMarkdownCell?: boolean } = {}): string {
   const notebook = JSON.parse(decodeTextBuffer(buffer)) as {
     cells?: { cell_type?: string; source?: unknown }[];
   };
@@ -158,11 +167,12 @@ function stripLeadingCodeIntroBlock(code: string, ext: string): string {
 export async function appendArtifactContents(
   parts: string[],
   artifacts: ArtifactRow[],
-  settings: Pick<LLMSettings, 'artifactStripIntroBlocks' | 'artifactStripIntroBlocksDeprecated' | 'pdfRedactionTopCm'>,
+  settings: ArtifactPrivacySettings,
   attachments: LLMImageAttachment[] = [],
 ): Promise<boolean> {
   let hasContent = false;
   const privacyMapper = createArtifactPrivacyMapper(artifacts);
+  const introStripOptions = artifactIntroStripOptions(settings);
   const codeExts: Record<string, string> = {
     py: 'python', js: 'javascript', ts: 'typescript', jsx: 'javascript', tsx: 'typescript',
     c: 'c', cpp: 'cpp', h: 'c', java: 'java', html: 'html', css: 'css', sql: 'sql', json: 'json',
@@ -177,11 +187,11 @@ export async function appendArtifactContents(
       try {
         const text = privacyMapper.sanitizeText(
           await extractHwpxText(fs.readFileSync(filepath), {
-            skipFirstTableRow: settings.artifactStripIntroBlocksDeprecated,
+            skipFirstTableRow: introStripOptions.skipFirstTableRow,
           })
         );
         if (text) {
-          const note = settings.artifactStripIntroBlocksDeprecated
+          const note = introStripOptions.skipFirstTableRow
             ? 'HWPX XML 텍스트 추출: 첫 표 행 제외'
             : 'HWPX XML 텍스트 추출';
           parts.push(`[${promptLabel}]\n[${note}]\n${text}\n---`);
@@ -192,11 +202,11 @@ export async function appendArtifactContents(
       try {
         const text = privacyMapper.sanitizeText(
           extractIpynbInputText(fs.readFileSync(filepath), {
-            skipFirstMarkdownCell: settings.artifactStripIntroBlocksDeprecated,
+            skipFirstMarkdownCell: introStripOptions.skipFirstMarkdownCell,
           })
         );
         if (text) {
-          const note = settings.artifactStripIntroBlocksDeprecated
+          const note = introStripOptions.skipFirstMarkdownCell
             ? 'Jupyter Notebook 입력 추출: 첫 마크다운 셀 및 실행 결과 제외'
             : 'Jupyter Notebook 입력 추출: 실행 결과 제외';
           parts.push(`[${promptLabel}]\n[${note}]\n${text}\n---`);
@@ -207,7 +217,7 @@ export async function appendArtifactContents(
         resolvedArtifact,
         artifacts.map((item) => ({ ...item, filepath: resolveStoredPath(item.filepath) })),
         privacyMapper.artifactName(artifact),
-        { skipFirstMarkdownCell: settings.artifactStripIntroBlocksDeprecated },
+        { skipFirstMarkdownCell: introStripOptions.skipFirstMarkdownCell },
       );
       const text = privacyMapper.sanitizeText(evidence.text);
       if (text) {
@@ -295,7 +305,7 @@ export type ArtifactPromptPreparation =
 export async function prepareArtifactPromptContents(
   parts: string[],
   artifacts: ArtifactRow[],
-  settings: Pick<LLMSettings, 'artifactStripIntroBlocks' | 'artifactStripIntroBlocksDeprecated' | 'pdfRedactionTopCm'>,
+  settings: ArtifactPrivacySettings,
 ): Promise<ArtifactPromptPreparation> {
   const attachments: LLMImageAttachment[] = [];
   try {

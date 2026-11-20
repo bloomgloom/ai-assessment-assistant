@@ -736,7 +736,7 @@ async function prepareGenerationForStudent(params: {
   contentType: 'scoring' | 'comments';
   criteriaSetId?: number;
   classContext: ClassContext | null;
-  settings: Pick<LLMSettings, 'artifactStripIntroBlocks' | 'artifactStripIntroBlocksDeprecated' | 'pdfRedactionTopCm'>;
+  settings: Pick<LLMSettings, 'artifactStripIntroBlocks' | 'pdfRedactionTopCm'>;
 }): Promise<PreparedGeneration> {
   const { student, domain, contentType, criteriaSetId, classContext, settings } = params;
   let evalCriteria: EvalCriterion[] = [];
@@ -823,7 +823,7 @@ async function prepareCombinedGenerationForStudent(params: {
   student: { id: number; name: string };
   domain: string;
   classContext: ClassContext | null;
-  settings: Pick<LLMSettings, 'artifactStripIntroBlocks' | 'artifactStripIntroBlocksDeprecated' | 'pdfRedactionTopCm'>;
+  settings: Pick<LLMSettings, 'artifactStripIntroBlocks' | 'pdfRedactionTopCm'>;
 }): Promise<PreparedGeneration> {
   const { student, domain, classContext, settings } = params;
   const evalCriteria = await getDomainEvalCriteria(classContext, domain);
